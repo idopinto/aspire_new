@@ -1,0 +1,14 @@
+geomloss
+joblib
+matplotlib
+nltk
+numpy
+pandas
+POT
+scikit_learn
+scipy
+seaborn
+sentence_transformers
+spacy
+torch
+transformers
