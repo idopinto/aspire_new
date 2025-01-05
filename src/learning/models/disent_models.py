@@ -42,7 +42,7 @@ class DecoderOnlyAspire(nn.Module):
         :param config: transformers.configuration_bert.BertConfig; bert hyperparam instance.
         """
         torch.nn.Module.__init__(self)
-        self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.model_config = model_config
         self.embedding_dim = model_hparams['embedding_dim']  # bert_config.hidden_size or DistilBertConfig.dim
         self.encoder = AutoModel.from_pretrained(model_hparams['base-pt-layer'],

@@ -52,20 +52,21 @@ def read_json(json_file):
     :return: yield one json object.
     """
     # print(f"pid: {os.getpid()}, checkpoint: inside read_json")
-    # print(next(iter(json_file)))
+    # # print(next(iter(json_file)))
+    # print(json_file)
+    # print(json_file.name)
+    # print(f"File readable? {json_file.readable()}")
 
-    for json_line in json_file:
-        # print(json_line)
-        # print(f"pid: {os.getpid()}, checkpoint: got next line")
-
+    for line_number, json_line in enumerate(json_file, start=1):
         # Try to manually skip bad chars.
         # https://stackoverflow.com/a/9295597/3262406
         try:
-            # print("HELLO")
             # f_dict = json.loads(json_line.replace('\r\n', '\\r\\n'),
             #                     encoding='utf-8')
+            # print(f"PID {os.getpid()}, Line {line_number}: trying to read JSON.")
             f_dict = json.loads(json_line.replace('\r\n', '\\r\\n'))
-            # print("GOOD")
+            # print(f"PID {os.getpid()}, Line {line_number}: Successfully read JSON.")
+
             yield f_dict
         # Skip case which crazy escape characters.
         except ValueError:

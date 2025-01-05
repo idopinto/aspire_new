@@ -5,22 +5,48 @@ import pprint
 import json
 import logging
 import argparse
-from datetime import datetime
+from datetime import datetime, timedelta
 import torch
+from torch.nn.parallel import DistributedDataParallel as ddp
+import torch.multiprocessing as torch_mp
+import torch.distributed as dist
+
 from pathlib import Path
 from src.learning import trainer, models, batchers
-from models import models
+from src.learning.models import disent_models
 import wandb
 
+PROJECT_NAME = 'aspire'
 ROOT = Path('/cs/labs/tomhope/idopinto12/aspire_new')
 TRAIN_DATA_DIR = ROOT / 'datasets' / 'train'
 CONFIG_DIR = ROOT / 'config' / 'models_config'
 RUN_DIR = ROOT / 'runs' / 'models'
 
+def get_run_path(cl_args):
+    run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%Y-%m-%d_%H")}"
+    run_path.mkdir(parents=True, exist_ok=True)
+    return run_path
+
+# Copying from: https://discuss.pytorch.org/t/why-do-we-have-to-create-logger-in-process-for-correct-logging-in-ddp/102164/3
+# Had double printing errors, solution finagled from:
+# https://stackoverflow.com/q/6729268/3262406
+def get_logger():
+    logger = logging.getLogger()
+    if logger.handlers:
+        logger.handlers.pop()
+    # Handlers.
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter())
+    logger.addHandler(
+        handler
+    )
+    logger.setLevel(logging.INFO)
+
+    return logger
 
 def init_wandb(all_hparams, run_name):
     wandb.login()
-    wandb.init(project="aspire", config=all_hparams, name=run_name)
+    wandb.init(project=PROJECT_NAME, config=all_hparams, name=run_name)
     return
 
 def get_vram_usage():
@@ -36,14 +62,14 @@ def setup_logging(log_fname: str = None):
     """Set up logging configuration."""
     if log_fname is not None:
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.ERROR,
             format="%(message)s",
             filename=log_fname,
             filemode='w'  # Overwrite by default
         )
     else:
         logging.basicConfig(
-            level=logging.INFO,
+            level=logging.ERROR,
             format="%(message)s",
             stream=sys.stdout
         )
@@ -52,7 +78,7 @@ def setup_logging(log_fname: str = None):
 
 def get_model(model_name, all_hparams):
     if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire'}:
-        return models.DecoderOnlyAspire(model_hparams=all_hparams)
+        return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
     else:
         logging.error(f'Unknown model: {model_name}')
         sys.exit(1)
@@ -64,12 +90,13 @@ def get_config(config_path, run_path):
 
     logging.info('All hyperparams:')
     logging.info(pprint.pformat(all_hparams))
+    return all_hparams
 
+def save_config(all_hparams, run_path):
     # Save hyperparams to disk.
     run_info = {'all_hparams': all_hparams}
     with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
         json.dump(run_info, fp)
-    return all_hparams
 
 def get_batcher(model_name, all_hparams):
     # Select appropriate batcher class.
@@ -82,17 +109,115 @@ def get_batcher(model_name, all_hparams):
         logging.error(f'Unknown model: {model_name}')
         sys.exit(1)
 
+
+def setup_ddp(rank, world_size):
+    # os.environ['MASTER_ADDR'] = 'localhost'
+    os.environ['MASTER_ADDR'] = '127.0.0.1'
+    os.environ['MASTER_PORT'] = '29500'
+
+    # initialize the process group
+    dist.init_process_group(
+        backend='nccl',
+        world_size=world_size,
+        rank=rank,
+        timeout=timedelta(seconds=3600)
+    )
+    torch.cuda.set_device(rank)
+
+
+def cleanup_ddp():
+    dist.destroy_process_group()
+
+def is_main_process(process_rank=0):
+    return process_rank == 0
+
+def ddp_train_model(process_rank, cl_args):
+    """
+    Read the int training and dev data, initialize and train the model.
+    """
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: start")
+    run_path = get_run_path(cl_args)
+    run_name = run_path.name
+    config_path = CONFIG_DIR / str(cl_args.config_path)
+    all_hparams = get_config(config_path, run_path) # Load hyperparameters and configs
+    model_name = all_hparams['model_name']
+    # print(f"Process rank {process_rank},pid={os.getpid()}, checkpoint: setup_ddp")
+    setup_ddp(rank=process_rank, world_size=cl_args.num_gpus)
+    # print(f"Process rank {process_rank},pid={os.getpid()}, checkpoint: setup_ddp completed")
+    if  process_rank > 0:
+        os.environ["WANDB_MODE"] = "offline"
+        logger = None
+    elif process_rank == 0:
+        init_wandb(all_hparams, run_name)
+        logger = get_logger()
+        # Save hyperparams to disk from a single process.
+        run_info = {'all_hparams': all_hparams}
+        with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
+            json.dump(run_info, fp)
+
+    model = get_model(model_name, all_hparams)
+    model.model_name = model_name # for backward compatiblity
+    model = model.to(process_rank)
+
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model initialized")
+    # if process_rank == 0:
+    #     # Save an untrained model version.
+    #     trainer.generic_save_function_ddp(model=model, save_path=run_path, model_suffix='init')
+    #     logger.info(f"Process rank {process_rank},pid={os.getpid()},checkpoint: initial model saved")
+    assert torch.cuda.current_device() == process_rank, "Incorrect GPU assignment"
+    model = ddp(model, device_ids=[process_rank], find_unused_parameters=True)
+
+    # # Move model to the GPU.
+    # if torch.cuda.is_available():
+    #     model.cuda(process_rank)
+    #     print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: moved to GPU.")
+    #     if process_rank == 0: logger.info('Running on GPU.')
+
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp model initialized")
+    batcher = get_batcher(model_name, all_hparams)
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: batcher initialized.")
+
+    model_trainer = trainer.BasicRankingTrainerDDP(logger=logger,
+                                                   process_rank=process_rank,
+                                                   num_gpus=cl_args.num_gpus,
+                                                   model=model,
+                                                   batcher=batcher,
+                                                   data_path=TRAIN_DATA_DIR,
+                                                   model_path=run_path,
+                                                   early_stop=True,
+                                                   verbose=True,
+                                                   dev_score='loss',
+                                                   train_hparams=all_hparams)
+    model_trainer.save_function = trainer.generic_save_function_ddp
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model_trainer initialized.")
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: start training.")
+    model_trainer.train()
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: training finished.")
+    # Synchronize before cleanup
+    dist.barrier()
+    # Cleanup DDP
+    cleanup_ddp()
+    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp cleaned.")
+
+    if process_rank == 0:
+        wandb.finish()
+
+
+
+
+
+
+
 def train_model(cl_args):
     """
     Read training and dev data, initialize and train the model.
     Save the trained model and results.
     """
-    run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%Y-%m-%d_%H")}"
-    run_path.mkdir(parents=True, exist_ok=True)
+    run_path = get_run_path(cl_args)
     run_name = run_path.name
     config_path = CONFIG_DIR / str(cl_args.config_path)
-
     all_hparams = get_config(config_path, run_path)
+    save_config(all_hparams, run_path)
     model_name = all_hparams['model_name']
     init_wandb(all_hparams, run_name)
     model = get_model(model_name, all_hparams)
@@ -155,9 +280,12 @@ def main():
         print(f"Current GPU: {torch.cuda.get_device_name(torch.cuda.current_device())}")
     else:
         print("CUDA is NOT available.")
+    print(f"NCCL Available: {torch.distributed.is_nccl_available()}")  # Should return True
+
     setup_logging(cl_args.log_fname)
     if cl_args.num_gpus > 1:
-        logging.error(f'1 GPU currently supported. Got {cl_args.num_gpus}.')
+        torch_mp.spawn(ddp_train_model, nprocs=cl_args.num_gpus, args=(cl_args,))
+        # logging.error(f'1 GPU currently supported. Got {cl_args.num_gpus}.')
     else:
         train_model(cl_args)
 if __name__ == '__main__':

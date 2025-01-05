@@ -9,7 +9,7 @@
   "train_size": 1276820,
   "dev_size": 2000,
   "num_epochs": 1,
-  "batch_size": 1,
+  "batch_size": 3,
   "accumulated_batch_size": 30,
   "update_rule": "adam",
   "learning_rate": 2e-5,

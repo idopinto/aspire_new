@@ -83,7 +83,10 @@ class SentTripleBatcher(GenericBatcher):
         if ex_fnames:
             pos_ex_fname = ex_fnames['pos_ex_fname']
             # Access the file with the sentence level examples.
-            self.pos_ex_file = codecs.open(pos_ex_fname, 'r', 'utf-8')  # TODO
+            # print(f"Opening file: {pos_ex_fname}")
+            # print(f"File exists? {os.path.exists(pos_ex_fname)}")
+            self.pos_ex_file = codecs.open(pos_ex_fname, 'r')  # TODO
+            # self.pos_ex_file = open(pos_ex_fname, 'r', encoding='utf-8')
         self.pt_lm_tokenizer = AutoTokenizer.from_pretrained(self.config_str)
         # Define the new special token
         # new_special_tokens = {'sep_token': '[SEP]'}
@@ -150,7 +153,7 @@ class SentTripleBatcher(GenericBatcher):
         neg_texts = []
         # Read content from file until the file content is exhausted.
 
-        # print(f"pid: {os.getpid()}, checkpoint: starting raw_batch_from_file")
+        # print(f"pid: {os.getpid()}, checkpoint: reading {ex_file.name}")
         for ex in du.read_json(ex_file):
             # print(f"pid: {os.getpid()}, checkpoint: raw_batch_from_file loop")
             docids = read_ex_count
