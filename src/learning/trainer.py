@@ -229,11 +229,11 @@ class GenericTrainer:
                             logging.info('Epoch {:d}; Iteration {:d}/{:d}; Dev score: {:.4f}'.format(*everything))
                     # current_time = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
-                    for key in self.loss_history:
-                        du.plot_train_hist(self.loss_history[key], self.loss_checked_iters,
-                                           fig_path=self.model_path, ylabel=f"{key}-{self.iteration}")
-                    du.plot_train_hist(self.dev_score_history, self.dev_checked_iters,
-                                       fig_path=self.model_path, ylabel=f'Dev-set Score {self.iteration}')
+                    # for key in self.loss_history:
+                    #     du.plot_train_hist(self.loss_history[key], self.loss_checked_iters,
+                    #                        fig_path=self.model_path, ylabel=f"{key}-{self.iteration}")
+                    # du.plot_train_hist(self.dev_score_history, self.dev_checked_iters,
+                    #                    fig_path=self.model_path, ylabel=f'Dev-set Score {self.iteration}')
                 self.iteration += 1
             epoch_time = time.time() - iters_start
             logging.info('Epoch {:d} time: {:.4f}s'.format(epoch, epoch_time))

@@ -1,5 +1,5 @@
 {
-  "model_name": "sbalisentbienc",
+  "model_name": "gte-Qwen2-1.5B-instruct-tsot-aspire",
   "base-pt-layer": "allenai/specter",
   "score_aggregation": "l2wasserstein",
   "geoml_blur": 0.05,

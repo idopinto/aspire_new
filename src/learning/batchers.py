@@ -85,7 +85,7 @@ class SentTripleBatcher(GenericBatcher):
             # Access the file with the sentence level examples.
             # print(f"Opening file: {pos_ex_fname}")
             # print(f"File exists? {os.path.exists(pos_ex_fname)}")
-            self.pos_ex_file = codecs.open(pos_ex_fname, 'r')  # TODO
+            self.pos_ex_file = codecs.open(pos_ex_fname, 'r', encoding='utf-8')  # TODO
             # self.pos_ex_file = open(pos_ex_fname, 'r', encoding='utf-8')
         self.pt_lm_tokenizer = AutoTokenizer.from_pretrained(self.config_str)
         # Define the new special token
@@ -342,7 +342,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
     """
 
     @staticmethod
-    def make_batch(raw_feed, pt_lm_tokenizer):
+    def make_batch(raw_feed, pt_lm_tokenizer, instruct=False):
         """
         :param raw_feed: dict; a dict with the set of things you want to feed
             the model.
@@ -373,7 +373,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
         query_texts = raw_feed['query_texts']
         # Get bert batches and prepare sep token indices.
         query_batch, query_abs_lens, qabs_senttok_idxs = AbsSentTokBatcher.prepare_abstracts(
-            query_texts, pt_lm_tokenizer)
+            query_texts, pt_lm_tokenizer, instruct=instruct)
 
         # Happens in the dev set.
         if 'neg_texts' in raw_feed and 'pos_texts' in raw_feed:
@@ -394,9 +394,9 @@ class AbsSentTokBatcher(SentTripleBatcher):
             pos_batch, pos_abs_lens, pabs_senttok_idxs = AbsSentTokBatcher.prepare_abstracts(
                 pos_texts, pt_lm_tokenizer)
             batch_dict = {
-                'query_bert_batch': query_batch, 'query_abs_lens': query_abs_lens, 'query_senttok_idxs': qabs_senttok_idxs,
-                'pos_bert_batch': pos_batch, 'pos_abs_lens': pos_abs_lens, 'pos_senttok_idxs': pabs_senttok_idxs
-            }
+                'query_batch': query_batch, 'query_abs_lens': query_abs_lens, 'query_senttok_idxs': qabs_senttok_idxs,
+                'pos_batch': pos_batch, 'pos_abs_lens': pos_abs_lens, 'pos_senttok_idxs': pabs_senttok_idxs
+            } # TODO check was query_bert_batch and pos_bert_batch
         # Happens when the function is called from other scripts to encode text.
         else:
             batch_dict = {

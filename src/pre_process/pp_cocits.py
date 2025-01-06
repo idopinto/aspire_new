@@ -22,8 +22,8 @@ logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Paths for saving/loading the vectors
-context_vectors_path = "/cs/labs/tomhope/idopinto12/aspire/datasets/train/context_reps.npy"
-abstract_vectors_path = "/cs/labs/tomhope/idopinto12/aspire/datasets/train/abstract_reps.npy"
+context_vectors_path = "/cs/labs/tomhope/idopinto12/aspire_new/datasets/train/context_reps.npy"
+abstract_vectors_path = "/cs/labs/tomhope/idopinto12/aspire_new/datasets/train/abstract_reps.npy"
 
 def save_representations(filepath, vectors):
     """Save vectors to a file."""
@@ -471,6 +471,82 @@ def generate_examples_aligned_cocitabs_rand(in_path, out_path, dataset, alignmen
         # logger.info('Number of cit contexts per triple: {:}'.format(all_summ))
         # logger.info(f'Number of examples: {out_examples}')
 
+
+def generate_examples_cocitabs_rand(in_path, out_path, dataset):
+    """
+    Assumes random (in-batch) negatives are used and only generates pair
+    examples of query/anchor and positive for co-cited abstracts.
+    - Generate negatives for the dev set so its a frozen dev set.
+    """
+    random.seed(69306)
+    dataset2area = {
+        's2orccompsci': 'compsci',
+        's2orcbiomed': 'biomed'
+    }
+    area = dataset2area[dataset]
+    print(f"Area: {area}")
+    with codecs.open(os.path.join(in_path, f'cocitpids2contexts-{area}-absnoisefilt.pickle'), 'rb') as fp:
+        cocitedpids2contexts = pickle.load(fp)
+        print(f'Read: {fp.name}')
+
+    with codecs.open(os.path.join(in_path, f'pid2abstract-s2orc{area}.pickle'), 'rb') as fp:
+        pid2abstract = pickle.load(fp)
+        all_abs_pids = list(pid2abstract.keys())
+        print(f'Read: {fp.name}')
+
+    all_cocits = list(cocitedpids2contexts.keys())
+    random.shuffle(all_cocits)
+    random.shuffle(all_cocits)
+    total_copids = len(all_cocits)
+    train_copids, dev_copids = all_cocits[:int(0.8 * total_copids)], all_cocits[int(0.8 * total_copids):]
+    print(f'cocited pid sets; train: {len(train_copids)}; dev: {len(dev_copids)}')
+
+    for split_str, split_copids in [('train', train_copids), ('dev', dev_copids)]:
+        out_ex_file = codecs.open(os.path.join(out_path, f'{split_str}-cocitabs.jsonl'), 'w', 'utf-8')
+        out_examples = 0
+        num_context_sents = []
+        for cocitedpids in split_copids:
+            contexts = cocitedpids2contexts[cocitedpids]
+            # Sample at most 10 context sentences at random to use for supervision.
+            out_contexts = random.sample(contexts, min(10, len(contexts)))
+            context_sents = [cc[1] for cc in out_contexts]
+            citing_pids = [cc[0] for cc in out_contexts]
+            # Generate all combinations of length 2 given the contexts.
+            cidxs = itertools.combinations(range(len(cocitedpids)), 2)
+            for idxs in cidxs:
+                anchor_pid = cocitedpids[idxs[0]]
+                pos_pid = cocitedpids[idxs[1]]
+                anchor_abs = {'TITLE': pid2abstract[int(anchor_pid)]['title'],
+                              'ABSTRACT': pid2abstract[int(anchor_pid)]['abstract']}
+                pos_abs = {'TITLE': pid2abstract[int(pos_pid)]['title'],
+                           'ABSTRACT': pid2abstract[int(pos_pid)]['abstract']}
+                out_ex = {
+                    'citing_pids': citing_pids,
+                    'cited_pids': cocitedpids,
+                    'query': anchor_abs,
+                    'pos_context': pos_abs,
+                    'citing_contexts': context_sents
+                }
+                num_context_sents.append(len(citing_pids))
+                # Of its dev also add a random negative context.
+                if split_str == 'dev':
+                    neg_pid = random.choice(all_abs_pids)
+                    neg_abs = {'TITLE': pid2abstract[int(neg_pid)]['title'],
+                               'ABSTRACT': pid2abstract[int(neg_pid)]['abstract']}
+                    out_ex['neg_context'] = neg_abs
+                out_ex_file.write(json.dumps(out_ex) + '\n')
+                out_examples += 1
+                if out_examples % 200000 == 0:
+                    print(f'{split_str}; {out_examples}')
+        print(f'Wrote: {out_ex_file.name}')
+        out_ex_file.close()
+        all_summ = pd.DataFrame(num_context_sents).describe()
+        print('Number of cit contexts per triple: {:}'.format(all_summ))
+        print(f'Number of examples: {out_examples}')
+
+
+
+
 def generate_examples_sent_rand(in_path, out_path, dataset):
     """
     Assumes random (in-batch) negatives are used and only generates pair
@@ -583,11 +659,14 @@ def main():
         elif cl_args.experiment in {'cosentbert'}:
             generate_examples_sent_rand(in_path=cl_args.in_path, out_path=cl_args.out_path,
                                         dataset=cl_args.dataset)
+        elif cl_args.experiment in {'cospecter'}:
+            generate_examples_cocitabs_rand(in_path=cl_args.in_path, out_path=cl_args.out_path,dataset=cl_args.dataset)
 
 
 
 if __name__ == '__main__':
     main()
 # python3 -m src.pre_process.pp_cocits filt_cocit_sents --run_path /cs/labs/tomhope/idopinto12/aspire/datasets/train --dataset s2orcbiomed
-# python3 -m src.pre_process.pp_cocits write_examples --in_path /cs/labs/tomhope/idopinto12/aspire/datasets/train --out_path /cs/labs/tomhope/idopinto12/aspire/datasets/train --dataset s2orcbiomed --experiment cosentbert
+# python3 -m src.pre_process.pp_cocits write_examples --in_path /cs/labs/tomhope/idopinto12/aspire/datasets/train --out_path /cs/labs/tomhope/idopinto12/aspire_new/datasets/train --dataset s2orcbiomed --experiment cosentbert
+# python3 -m src.pre_process.pp_cocits write_examples --in_path /cs/labs/tomhope/idopinto12/aspire/datasets/train --out_path /cs/labs/tomhope/idopinto12/aspire_new/datasets/train --dataset s2orcbiomed --experiment cospecter
 

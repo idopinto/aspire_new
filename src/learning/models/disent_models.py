@@ -303,8 +303,10 @@ class DecoderOnlyAspire(nn.Module):
                                                        sent_tok_idxs=doc_query_senttoki)
         # Make numpy arrays and return.
         if torch.cuda.is_available():
-            sent_reps = sent_reps.cpu().data.numpy()
-            doc_reps = doc_reps.cpu().data.numpy()
+            # sent_reps = sent_reps.cpu().data.numpy()
+            sent_reps = sent_reps.float().cpu().data.numpy()
+            # doc_reps = doc_reps.cpu().data.numpy()
+            doc_reps = doc_reps.float().cpu().numpy()
         else:
             sent_reps = sent_reps.data.numpy()
             doc_reps = doc_reps.data.numpy()
@@ -329,7 +331,7 @@ class DecoderOnlyAspire(nn.Module):
         cand_encode_ret_dict: list({'sent_reps': numpy.array, 'doc_cls_reps': numpy.array})
         """
         # Pack representations as padded gpu tensors.
-        query_reps, query_sent_reps = query_encode_ret_dict['doc_reps'], query_encode_ret_dict['sent_reps']
+        query_rep, query_sent_reps = query_encode_ret_dict['doc_reps'], query_encode_ret_dict['sent_reps']
         cand_reps = [d['doc_reps'] for d in cand_encode_ret_dicts]
         cand_sent_reps = [d['sent_reps'] for d in cand_encode_ret_dicts]
         batch_size = len(cand_sent_reps)
@@ -344,16 +346,27 @@ class DecoderOnlyAspire(nn.Module):
             padded_cand_sent_reps[bi, :cand_lens[bi], :] = ex_reps
             # Just repeat the query sents for now.
             padded_query_sent_reps[bi, :qmax_sents, :] = query_sent_reps
-            query_reps.append(query_reps)
-        padded_query_sent_reps = Variable(torch.FloatTensor(padded_query_sent_reps)).to(self.device, dtype=torch.bfloat16)
-        padded_cand_sent_reps = Variable(torch.FloatTensor(padded_cand_sent_reps)).to(self.device, dtype=torch.bfloat16)
-        query_reps = Variable(torch.FloatTensor(np.vstack(query_reps))).to(self.device, dtype=torch.bfloat16)
-        cand_reps = Variable(torch.FloatTensor(np.vstack(cand_reps))).to(self.device, dtype=torch.bfloat16)
+            query_reps.append(query_rep)
+        # padded_query_sent_reps = Variable(torch.FloatTensor(padded_query_sent_reps)).to(self.device, dtype=torch.bfloat16)
+        padded_query_sent_reps = torch.tensor(padded_query_sent_reps, dtype=torch.float32).to(self.device,
+                                                                                              dtype=torch.bfloat16)
+        padded_cand_sent_reps = torch.tensor(padded_cand_sent_reps, dtype=torch.float32).to(self.device,
+                                                                                              dtype=torch.bfloat16)
+        # padded_cand_sent_reps = Variable(torch.FloatTensor(padded_cand_sent_reps)).to(self.device, dtype=torch.bfloat16)
+        # query_reps = Variable(torch.FloatTensor(np.vstack(query_reps))).to(self.device, dtype=torch.bfloat16)
+        # cand_reps = Variable(torch.FloatTensor(np.vstack(cand_reps))).to(self.device, dtype=torch.bfloat16)
+        query_reps = torch.tensor(np.vstack(query_reps), dtype=torch.float32).to(self.device, dtype=torch.bfloat16)
+        cand_reps = torch.tensor(np.vstack(cand_reps), dtype=torch.float32).to(self.device, dtype=torch.bfloat16)
         # Compute scores as at train time.
-        qt = rep_len_tup(embed=padded_query_sent_reps.permute(0, 2, 1), abs_lens=query_lens)
-        ct = rep_len_tup(embed=padded_cand_sent_reps.permute(0, 2, 1), abs_lens=cand_lens)
+        qt = rep_len_tup(embed=padded_query_sent_reps.permute(0, 2, 1).float(), abs_lens=query_lens)
+        ct = rep_len_tup(embed=padded_cand_sent_reps.permute(0, 2, 1).float(), abs_lens=cand_lens)
 
-        batch_sent_sims, pair_sims = self.dist_function(query=qt, cand=ct, return_pair_sims=True)
+        # batch_sent_sims, pair_sims = self.dist_function(query=qt, cand=ct, return_pair_sims=True)
+        batch_sent_sims, pair_sims = self.dist_function(
+            query=qt,  # Convert query_reps to float32
+            cand=ct,  # Convert cand_reps to float32
+            return_pair_sims=True
+        )
         # In the case of WordSentAbsSupAlignBiEnc which also uses this function if sent_loss_prop is zero
         # use the supervised sent prop instead.
         try:
@@ -368,7 +381,7 @@ class DecoderOnlyAspire(nn.Module):
         if torch.cuda.is_available():
             batch_scores = batch_scores.cpu().data.numpy()
             if isinstance(pair_sims, list):
-                pair_sims = [t.cpu().data.numpy() for t in pair_sims]
+                pair_sims = [t.float().cpu().data.numpy() for t in pair_sims]
             else:
                 pair_sims = pair_sims.cpu().data.numpy()
         else:

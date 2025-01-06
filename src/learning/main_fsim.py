@@ -77,7 +77,7 @@ def setup_logging(log_fname: str = None):
     logging.info(' '.join(sys.argv))
 
 def get_model(model_name, all_hparams):
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire'}:
+    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire'}:
         return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
     else:
         logging.error(f'Unknown model: {model_name}')
@@ -100,7 +100,7 @@ def save_config(all_hparams, run_path):
 
 def get_batcher(model_name, all_hparams):
     # Select appropriate batcher class.
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire'}:
+    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire'}:
         batcher = batchers.AbsSentTokBatcherPreAlign
         batcher.align_type = all_hparams.get('align_type', 'cc_align')
         batcher.config_str = all_hparams['base-pt-layer']
@@ -160,18 +160,18 @@ def ddp_train_model(process_rank, cl_args):
     model = model.to(process_rank)
 
     # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model initialized")
-    # if process_rank == 0:
-    #     # Save an untrained model version.
-    #     trainer.generic_save_function_ddp(model=model, save_path=run_path, model_suffix='init')
-    #     logger.info(f"Process rank {process_rank},pid={os.getpid()},checkpoint: initial model saved")
+    if process_rank == 0:
+        # Save an untrained model version.
+        trainer.generic_save_function_ddp(model=model, save_path=run_path, model_suffix='init')
+        logger.info(f"Process rank {process_rank},pid={os.getpid()},checkpoint: initial model saved")
     assert torch.cuda.current_device() == process_rank, "Incorrect GPU assignment"
     model = ddp(model, device_ids=[process_rank], find_unused_parameters=True)
 
     # # Move model to the GPU.
     # if torch.cuda.is_available():
-    #     model.cuda(process_rank)
-    #     print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: moved to GPU.")
-    #     if process_rank == 0: logger.info('Running on GPU.')
+        # model.cuda(process_rank)
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: moved to GPU.")
+        # if process_rank == 0: logger.info('Running on GPU.')
 
     # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp model initialized")
     batcher = get_batcher(model_name, all_hparams)
@@ -229,7 +229,7 @@ def train_model(cl_args):
     logging.info(model)
 
     # Save initial (untrained) model.
-    trainer.generic_save_function(model=model, save_path=run_path, model_suffix='init')
+    # trainer.generic_save_function(model=model, save_path=run_path, model_suffix='init')
     batcher = get_batcher(model_name, all_hparams)
     # Initialize the trainer.
     model_trainer = trainer.BasicRankingTrainer(
