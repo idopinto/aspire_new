@@ -701,8 +701,6 @@ def main():
     Parse command line arguments and call all the above routines.
     :return:
     """
-    # experiment = comet_ml.Experiment(api_key="6O6EgDCIGDKyqtyg9TdKIux2z", project_name="aspire-evaluation",
-    #                                  workspace="idopinto")
     # print("Your experiment key is:", experiment.get_key())
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest='subcommand',
