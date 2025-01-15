@@ -1,5 +1,5 @@
 """
-Functions used across models.
+Functions used across facetid_models.
 """
 import numpy as np
 import torch

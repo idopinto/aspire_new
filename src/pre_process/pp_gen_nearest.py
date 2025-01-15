@@ -1,5 +1,5 @@
 """
-Generate rankings over randidates for queries for different datasets and trained models
+Generate rankings over randidates for queries for different datasets and trained facetid_models
 or baselines. There are three types of functions here: one assumes a set of embeddings
 from a model stored to disk and ranks based on distance/similarity metrics of these
 embeddings, another type of function uses a more complex late interaction method for
@@ -26,7 +26,7 @@ from scipy import spatial
 from transformers import AutoModel, AutoTokenizer
 
 import src.pre_process.data_utils as du
-from src.learning.models import disent_models
+from src.learning.facetid_models import disent_models
 from src.learning import batchers
 
 # https://stackoverflow.com/a/46635273/3262406

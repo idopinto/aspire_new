@@ -1,5 +1,5 @@
 """
-For the faceted similarity models:
+For the faceted similarity facetid_models:
 Call code from everywhere, read data, initialize model, train model and make
 sure training is doing something meaningful, predict with trained model and run
 evaluation
@@ -9,7 +9,7 @@ import logging
 import codecs, pprint, json
 import torch
 from . import batchers, trainer
-from .models import sentsim_models
+from .facetid_models import sentsim_models
 from datetime import datetime
 from pathlib import Path
 import wandb
@@ -17,7 +17,7 @@ import wandb
 ROOT = Path('/cs/labs/tomhope/idopinto12/aspire_new')
 TRAIN_DATA_DIR = ROOT / 'datasets' / 'train'
 CONFIG_DIR = ROOT / 'config' / 'models_config'
-RUN_DIR = ROOT / 'runs' / 'models'
+RUN_DIR = ROOT / 'runs' / 'facetid_models'
 
 def init_wandb(all_hparams):
     wandb.login()

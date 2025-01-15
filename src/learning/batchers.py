@@ -1,6 +1,6 @@
 """
 Classes to stream int-mapped data from file in batches, pad and sort them (as needed)
-and return batch dicts for the models.
+and return batch dicts for the facetid_models.
 """
 import codecs
 import sys
@@ -67,7 +67,7 @@ class SentTripleBatcher(GenericBatcher):
 
     def __init__(self, ex_fnames, num_examples, batch_size):
         """
-        Batcher class for the em style trained models.
+        Batcher class for the em style trained facetid_models.
         This batcher is also used at test time, at this time all the arguments here are
         meaningless. Only the make_batch and ones beneath it will be used.
         :param ex_fnames: dict('pos_ex_fname': str, 'neg_ex_fname': str)
@@ -82,17 +82,9 @@ class SentTripleBatcher(GenericBatcher):
         # Call it pos ex fname even so code elsewhere can be re-used.
         if ex_fnames:
             pos_ex_fname = ex_fnames['pos_ex_fname']
-            # Access the file with the sentence level examples.
-            # print(f"Opening file: {pos_ex_fname}")
-            # print(f"File exists? {os.path.exists(pos_ex_fname)}")
             self.pos_ex_file = codecs.open(pos_ex_fname, 'r', encoding='utf-8')  # TODO
             # self.pos_ex_file = open(pos_ex_fname, 'r', encoding='utf-8')
         self.pt_lm_tokenizer = AutoTokenizer.from_pretrained(self.config_str)
-        # Define the new special token
-        # new_special_tokens = {'sep_token': '[SEP]'}
-
-        # Add the special token to the tokenizer
-        # self.pt_lm_tokenizer.add_special_tokens(new_special_tokens)
     def next_batch(self):
         """
         Yield the next batch. Based on whether its train_mode or not yield a
@@ -108,10 +100,8 @@ class SentTripleBatcher(GenericBatcher):
                 cur_batch_size = self.batch_size
             else:
                 cur_batch_size = self.full_len - self.batch_start
-            # print(f"batch: {nb}, cur_batch_size: {cur_batch_size}")
             batch_query_docids, batch_queries, batch_pos, batch_neg = \
                 next(SentTripleBatcher.raw_batch_from_file(self.pos_ex_file, cur_batch_size))
-            # print(f"raw_batch_from_file success")
             self.batch_start = self.batch_end
             self.batch_end += self.batch_size
             try:
@@ -152,10 +142,7 @@ class SentTripleBatcher(GenericBatcher):
         pos_texts = []
         neg_texts = []
         # Read content from file until the file content is exhausted.
-
-        # print(f"pid: {os.getpid()}, checkpoint: reading {ex_file.name}")
         for ex in du.read_json(ex_file):
-            # print(f"pid: {os.getpid()}, checkpoint: raw_batch_from_file loop")
             docids = read_ex_count
             ex_query_docids.append(docids)
             query_texts.append(ex['query'])
@@ -203,7 +190,7 @@ class SentTripleBatcher(GenericBatcher):
         query_batch, _, _ = SentTripleBatcher.prepare_sentences(sents=query_texts, tokenizer=pt_lm_tokenizer)
         pos_batch, _, _ = SentTripleBatcher.prepare_sentences(sents=pos_texts, tokenizer=pt_lm_tokenizer)
 
-        # Happens with the dev set in models using triple losses and in batch negs.
+        # Happens with the dev set in facetid_models using triple losses and in batch negs.
         if 'neg_texts' in raw_feed:
             neg_texts = raw_feed['neg_texts']
             neg_batch, _, _ = SentTripleBatcher.prepare_sentences(sents=neg_texts, tokenizer=pt_lm_tokenizer)
@@ -222,16 +209,16 @@ class SentTripleBatcher(GenericBatcher):
     @staticmethod
     def prepare_sentences(sents, tokenizer):
         """
-        Given a batch of sentences prepare a batch which can be passed through BERT.
+        Given a batch of sentences prepares a batch which can be passed through BERT.
         :param sents: list(string)
         :param tokenizer: an instance of the appropriately initialized BERT tokenizer.
         :return:
         """
-        max_num_toks = 500
+        max_num_toks = 512
         # Construct the batch.
         tokenized_batch = []
         tokenized_text = []
-        batch_seg_ids = []
+        # batch_seg_ids = []
         batch_attn_mask = []
         seq_lens = []
         max_seq_len = -1
@@ -242,25 +229,23 @@ class SentTripleBatcher(GenericBatcher):
             # Convert token to vocabulary indices
             indexed_tokens = tokenizer.convert_tokens_to_ids(bert_tokenized_text)
             # Append CLS and SEP tokens to the text..
-            indexed_tokens = tokenizer.build_inputs_with_special_tokens(token_ids_0=indexed_tokens)
-            if len(indexed_tokens) > max_seq_len:
-                max_seq_len = len(indexed_tokens)
+            # indexed_tokens = tokenizer.build_inputs_with_special_tokens(token_ids_0=indexed_tokens)
+            max_seq_len = max(max_num_toks, len(indexed_tokens))
             seq_lens.append(len(indexed_tokens))
             tokenized_batch.append(indexed_tokens)
-            batch_seg_ids.append([0] * len(indexed_tokens))
+            # batch_seg_ids.append([0] * len(indexed_tokens))
             batch_attn_mask.append([1] * len(indexed_tokens))
         # Pad the batch.
-        for ids_sent,seg_ids, attn_mask in zip(tokenized_batch,batch_seg_ids, batch_attn_mask):
+        for ids_sent, attn_mask in zip(tokenized_batch,  batch_attn_mask):
             pad_len = max_seq_len - len(ids_sent)
             ids_sent.extend([tokenizer.pad_token_id] * pad_len)
-            seg_ids.extend([tokenizer.pad_token_id] * pad_len)
+            # seg_ids.extend([tokenizer.pad_token_id] * pad_len)
             attn_mask.extend([tokenizer.pad_token_id] * pad_len)
 
 
         # The batch which the BERT model will input.
         batch = {
             'tokid_tt': torch.tensor(tokenized_batch),
-            'seg_tt': torch.tensor(batch_seg_ids),
             'attnmask_tt': torch.tensor(batch_attn_mask),
             'seq_lens': seq_lens
         }
@@ -271,16 +256,15 @@ class AbsTripleBatcher(SentTripleBatcher):
     @staticmethod
     def make_batch(raw_feed, pt_lm_tokenizer):
         """
-        Creates positive and query batches. Only used for training. Test use happens
-        with embeddings generated in the pre_proc_buildreps scripts.
-        :param raw_feed: dict; a dict with the set of things you want to feed
-            the model.
+        Creates positive and query batches. Only used for training.
+        Test use happens with embeddings generated in the pre_proc_buildreps scripts.
+        :param raw_feed: dict; a dict with the set of things you want to feed the model.
         :return:
             batch_dict: dict of the form:
             {
-                'query_bert_batch': dict(); The batch which BERT inputs with query sents;
+                'query_batch': dict(); The batch which BERT inputs with query sents;
                     Tokenized and int mapped sentences and other inputs to BERT.
-                'pos_bert_batch': dict();  The batch which BERT inputs with positive sents;
+                'pos_batch': dict();  The batch which BERT inputs with positive sents;
                     Tokenized and int mapped sentences and other inputs to BERT.
             }
         """
@@ -289,7 +273,7 @@ class AbsTripleBatcher(SentTripleBatcher):
         # Get bert batches and prepare sep token indices.
         qbert_batch = AbsTripleBatcher.prepare_abstracts(batch_abs=query_texts, pt_lm_tokenizer=pt_lm_tokenizer)
 
-        # Happens with the dev set in models using triple losses and in batch negs.
+        # Happens with the dev set in facetid_models using triple losses and in batch negs.
         if 'neg_texts' in raw_feed and 'pos_texts' in raw_feed:
             neg_texts = raw_feed['neg_texts']
             nbert_batch = AbsTripleBatcher.prepare_abstracts(batch_abs=neg_texts, pt_lm_tokenizer=pt_lm_tokenizer)
@@ -396,7 +380,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
             batch_dict = {
                 'query_batch': query_batch, 'query_abs_lens': query_abs_lens, 'query_senttok_idxs': qabs_senttok_idxs,
                 'pos_batch': pos_batch, 'pos_abs_lens': pos_abs_lens, 'pos_senttok_idxs': pabs_senttok_idxs
-            } # TODO check was query_bert_batch and pos_bert_batch
+            }
         # Happens when the function is called from other scripts to encode text.
         else:
             batch_dict = {
@@ -425,7 +409,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
                 seqs = [ex_abs['TITLE'] + '\n']
             seqs.extend([s for s in ex_abs['ABSTRACT']])
             batch_abs_seqs.append(seqs)
-        bert_batch, tokenized_abs, sent_token_idxs = AbsSentTokBatcher.prepare_sentences(
+        batch, tokenized_abs, sent_token_idxs = AbsSentTokBatcher.prepare_sentences(
             sents=batch_abs_seqs, tokenizer=pt_lm_tokenizer)
 
         # Get SEP indices from the sentences; some of the sentences may have been cut off
@@ -436,7 +420,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
             abs_lens.append(num_sents)
             assert (num_sents > 0)
 
-        return bert_batch, abs_lens, sent_token_idxs
+        return batch, abs_lens, sent_token_idxs
 
     @staticmethod
     def prepare_sentences(sents, tokenizer):
@@ -452,7 +436,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
             batch_tokenized_text: list(string); tokenized concated title and abstract.
             batch_sent_token_idxs: list(list(list(int))); batch_size([num_sents_per_abs[num_tokens_in_sent]])
         """
-        max_num_toks = 500
+        max_num_toks = 512
         # Construct the batch.
         tokenized_batch = []
         batch_tokenized_text = []
@@ -513,20 +497,25 @@ class AbsSentTokBatcher(SentTripleBatcher):
         #     # seg_ids.extend([tokenizer.pad_token_id] * pad_len)
         #     attn_mask.extend([0] * pad_len)
 
-        for ids_sent, attn_mask in zip(tokenized_batch, batch_attn_mask):
+        for abs_i, (ids_sent, attn_mask, sent_token_indices) in enumerate(zip(tokenized_batch, batch_attn_mask,batch_sent_token_idxs)):
             pad_len = max_seq_len - len(ids_sent)
-
             # Prepend pad_token_id for left padding
             ids_sent[:0] = [tokenizer.pad_token_id] * pad_len  # Insert padding at the start
             # seg_ids[:0] = [tokenizer.pad_token_id] * pad_len  # Uncomment if segmentation is required
             attn_mask[:0] = [0] * pad_len  # Assuming 0 is the padding mask
-        # The batch which the MISTRAL model will input.
+
+            # shift each token index by pad_len
+            for s_i, tok_idxs in enumerate(sent_token_indices):
+                shifted = [idx + pad_len for idx in tok_idxs]
+                batch_sent_token_idxs[abs_i][s_i] = shifted
+        # The batch which the (Decoder-Only) model will input.
         batch = {
             'tokid_tt': torch.tensor(tokenized_batch),
             # 'seg_tt': torch.tensor(batch_seg_ids),
             'attnmask_tt': torch.tensor(batch_attn_mask),
             'seq_lens': seq_lens
         }
+
         return batch, batch_tokenized_text, batch_sent_token_idxs
 
 
@@ -646,6 +635,6 @@ class AbsSentTokBatcherPreAlign(AbsSentTokBatcher):
             return batch, abs_lens, sent_token_idxs
 
 def get_detailed_instruct(task_description: str, title: str) -> str:
-    return f'Instruct: {task_description}\nTitle: {title}'
+    return f'Instruct: {task_description}\nQuery: {title}'
 
 

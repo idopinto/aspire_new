@@ -1,6 +1,6 @@
 """
 Models which learn sentence representations.
-Mostly a bunch of wrappers for raw bert models which are fine-tuned.
+Mostly a bunch of wrappers for raw bert facetid_models which are fine-tuned.
 """
 import torch
 from torch import nn as nn

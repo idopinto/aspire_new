@@ -6,9 +6,10 @@ from torch import nn as nn, Tensor
 from torch.autograd import Variable
 from torch.nn import functional
 from transformers import AutoModel
+from peft import LoraConfig, get_peft_model
 
-from src.learning.models import pair_distances as pair_dist
-from src.learning.models.loss_functions import CustomTripletMarginWithDistanceLoss
+from src.learning.facetid_models import pair_distances as pair_dist
+from src.learning.facetid_models.loss_functions import CustomTripletMarginWithDistanceLoss
 
 rep_len_tup = namedtuple('RepLen', ['embed', 'abs_lens'])
 cf_rep_len_tup = namedtuple('CFRepLen', ['embed', 'embed_cf', 'abs_lens'])
@@ -33,26 +34,30 @@ def get_dist_function(score_agg_type: str, model_hparams: dict = None):
         raise ValueError(f'Unknown aggregation: {score_agg_type}')
 
 class DecoderOnlyAspire(nn.Module):
-    def __init__(self, model_hparams, model_config=None):
+    def __init__(self, model_hparams=None):
         """
         :param model_hparams: dict(string:int); model hyperparams.
-            num_code_vecs: int; number of code vectors to disentangle into.
-                The number of facets.
-            num_tf_heads: int; number of heads in the context transformer.
-        :param config: transformers.configuration_bert.BertConfig; bert hyperparam instance.
         """
-        torch.nn.Module.__init__(self)
+        super(DecoderOnlyAspire, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.model_config = model_config
-        self.embedding_dim = model_hparams['embedding_dim']  # bert_config.hidden_size or DistilBertConfig.dim
+        self.embedding_dim = model_hparams['embedding_dim']
         self.encoder = AutoModel.from_pretrained(model_hparams['base-pt-layer'],
                                                  torch_dtype=torch.bfloat16,
                                                  trust_remote_code=True,
                                                  attn_implementation="flash_attention_2")
-        # self.encoder.resize_token_embeddings(model_hparams['vocab_size'])
-
         self.encoder.config.output_hidden_states = True
-        # If fine tune is False then freeze the bert params.
+        # Count trainable parameters (before applying LoRA)
+        trainable_params_before = self._count_trainable_parameters(self.encoder)
+        print(f"Trainable parameters (before LoRA): {trainable_params_before:,}")
+        # Apply LoRA if lora_config is provided
+        lora = model_hparams.get('lora', False)
+        if lora:
+            lora_config = model_hparams.get('lora_config', None)
+            self.encoder = self._apply_lora(self.encoder,lora_config)
+            # Count trainable parameters (after applying LoRA)
+            trainable_params_after = self._count_trainable_parameters(self.encoder)
+            print(f"Trainable parameters (after LoRA): {trainable_params_after:,}")
+        # If fine tune is False then freeze the params.
         if not model_hparams['fine_tune']:
             self.encoder.base_model.requires_grad_(False)
 
@@ -77,6 +82,31 @@ class DecoderOnlyAspire(nn.Module):
         self.sentsup_loss_prop = float(model_hparams['sentsup_loss_prop'])
         self.cd_svalue_l1_prop = float(model_hparams.get('cd_svalue_l1_prop', 0.0))
 
+    def _count_trainable_parameters(self, model):
+        """
+        Count the number of trainable parameters in a PyTorch model.
+        :param model: torch.nn.Module; the model to count parameters for.
+        :return: int; the number of trainable parameters.
+        """
+        return sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+    def _apply_lora(self, model, lora_config):
+        """
+        Apply LoRA to the given model using the provided configuration.
+        :param model: The base model to which LoRA layers will be added.
+        :param lora_config: dict; Configuration for LoRA fine-tuning.
+        :return: The model with LoRA layers applied.
+        """
+        if not lora_config: return model
+        lora_configuration = LoraConfig(
+            r=lora_config.get('r', 8 ),  # LoRA rank
+            lora_alpha=lora_config.get('lora_alpha', 32),  # Scaling factor
+            target_modules=lora_config.get('target_modules', ["q_proj", "k_proj", "v_proj", "o_proj"]),
+            lora_dropout=lora_config.get('lora_dropout', 0.1),
+            bias=lora_config.get('bias', "none")  # 'none', 'all', or 'lora_only'
+        )
+        model = get_peft_model(model, lora_configuration)
+        return model
 
     def last_token_pool(self, last_hidden_states: Tensor,
                         attention_mask: Tensor) -> Tensor:
@@ -197,6 +227,7 @@ class DecoderOnlyAspire(nn.Module):
 
             return loss_val
 
+
     def partial_forward(self, batch, abs_lens, sent_tok_idxs):
         """
         Pass a batch of sentences through BERT and read off sentence
@@ -228,7 +259,7 @@ class DecoderOnlyAspire(nn.Module):
         """
         seq_lens, max_sents = batch['seq_lens'], max(num_sents)
         batch_size, max_seq_len = len(seq_lens), max(seq_lens)
-        tokid_tt, attnmask_tt = batch['tokid_tt'].to(self.device), batch['attnmask_tt'].to(self.device)        # Pass input through MISTRAL and return all layer hidden outputs.
+        tokid_tt, attnmask_tt = batch['tokid_tt'].to(self.device), batch['attnmask_tt'].to(self.device)  # Pass input through MISTRAL and return all layer hidden outputs.
         model_outputs = self.encoder(tokid_tt, attention_mask=attnmask_tt)
         final_hidden_state = model_outputs.last_hidden_state
         doc_reps = self.last_token_pool(final_hidden_state, attention_mask=attnmask_tt).squeeze()
@@ -246,7 +277,7 @@ class DecoderOnlyAspire(nn.Module):
                 except IndexError:  # This happens in the case where the abstract has fewer than max sents.
                     sent_i_tok_idxs = []
                 cur_sent_mask[batch_abs_i, sent_i_tok_idxs, :] = 1.0
-            sent_mask = Variable(torch.FloatTensor(cur_sent_mask)).to(self.device)
+            sent_mask = Variable(torch.FloatTensor(cur_sent_mask)).to(self.device) # TODO change from Variable
             # batch_size x seq_len x encoding_dim
             sent_tokens = final_hidden_state * sent_mask
             # The sent_masks non zero elements in one slice along embedding dim is the sentence length.
@@ -271,7 +302,8 @@ class DecoderOnlyAspire(nn.Module):
         doc_batch, doc_abs_lens = batch_dict['batch'], batch_dict['abs_lens']
         doc_query_senttoki = batch_dict['senttok_idxs']
         # Get the representations from the model; batch_size x encoding_dim x max_sents
-        doc_reps, sent_reps = self.partial_forward(batch=doc_batch, abs_lens=doc_abs_lens,
+        doc_reps, sent_reps = self.partial_forward(batch=doc_batch,
+                                                    abs_lens=doc_abs_lens,
                                                    sent_tok_idxs=doc_query_senttoki)
         # Make numpy arrays and return.
         if torch.cuda.is_available():
@@ -296,10 +328,10 @@ class DecoderOnlyAspire(nn.Module):
             negative examples.
         :return: ret_dict
         """
-        doc_bert_batch, doc_abs_lens = batch_dict['batch'], batch_dict['abs_lens']
+        doc_batch, doc_abs_lens = batch_dict['batch'], batch_dict['abs_lens']
         doc_query_senttoki = batch_dict['senttok_idxs']
         # Get the representations from the model; batch_size x encoding_dim x max_sents
-        doc_reps, sent_reps = self.partial_forward(batch=doc_bert_batch, abs_lens=doc_abs_lens,
+        doc_reps, sent_reps = self.partial_forward(batch=doc_batch, abs_lens=doc_abs_lens,
                                                        sent_tok_idxs=doc_query_senttoki)
         # Make numpy arrays and return.
         if torch.cuda.is_available():

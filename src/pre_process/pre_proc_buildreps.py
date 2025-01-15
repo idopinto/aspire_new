@@ -1,5 +1,5 @@
 """
-Build abstract or sentence embeddings from own trained models or a pretrained model
+Build abstract or sentence embeddings from own trained facetid_models or a pretrained model
 and save to disk to use for ranking.
 """
 import os

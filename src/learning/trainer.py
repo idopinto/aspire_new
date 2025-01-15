@@ -28,7 +28,7 @@ class GenericTrainer:
                  early_stop=True, verbose=True, dev_score='loss'):
         """
         A generic trainer class that defines the training procedure. Trainers
-        for other models should subclass this and define the data that the models
+        for other facetid_models should subclass this and define the data that the facetid_models
         being trained consume.
         :param model: pytorch model.
         :param batcher: a model_utils.Batcher class.
@@ -300,7 +300,7 @@ class BasicRankingTrainer(GenericTrainer):
         # dataset as there are epochs and a negative examples file.
         self.train_fnames = []
         # Expect these to be there for the case of using diff kinds of training data for the same
-        # model; hard negatives models, different alignment models and so on.
+        # model; hard negatives facetid_models, different alignment facetid_models and so on.
         if 'train_suffix' in train_hparams:
             suffix = train_hparams['train_suffix']
             train_basename = f'train-{suffix}'
@@ -349,7 +349,7 @@ class GenericTrainerDDP:
                  early_stop=True, verbose=True, dev_score='loss'):
         """
         A generic trainer class that defines the training procedure. Trainers
-        for other models should subclass this and define the data that the models
+        for other facetid_models should subclass this and define the data that the facetid_models
         being trained consume.
         :param logger: a logger to write logs with.
         :param process_rank: int; which process this is.
@@ -543,13 +543,13 @@ class GenericTrainerDDP:
                                          .format(*everything))
             dist.barrier()
             self.iteration += 1
-        return best_params, best_epoch, best_iter
+        return best_params, best_epoch, best_iter,best_dev_score
 
     def train(self):
         """
         Trains the model over a specified number of epochs and iterations, performs optimization, evaluates
         on the development dataset, and manages early stopping if applicable. The method additionally tracks
-        and logs relevant training metrics and saves both the final and best-performing models.
+        and logs relevant training metrics and saves both the final and best-performing facetid_models.
 
         :param self: Represents the instance of the class containing this method.
 
@@ -557,7 +557,7 @@ class GenericTrainerDDP:
             model optimization). Replace `AnyErrorType` with specific exceptions if determinable.
 
         :param self.model: The model being trained.
-        :param self.model_path: Path where the trained models (final and best) will be stored.
+        :param self.model_path: Path where the trained facetid_models (final and best) will be stored.
         :param self.num_epochs: Number of epochs for the training process.
         :param self.total_iters: Total iterations performed during training.
         :param self.batch_size: Batch size used for data sampling during training and evaluation.
@@ -586,7 +586,7 @@ class GenericTrainerDDP:
                                          batch_size=self.batch_size)
             # conditional_log(self.logger, self.process_rank,message=f"batcher created"
             iters_start = time.time()
-            best_params, best_epoch, best_iter = self.train_step(epoch=epoch,
+            best_params, best_epoch, best_iter, best_dev_score= self.train_step(epoch=epoch,
                                                                  epoch_batcher=epoch_batcher,
                                                                  total_time_per_batch=total_time_per_batch,
                                                                  total_time_per_dev=total_time_per_dev,
@@ -643,7 +643,7 @@ class BasicRankingTrainerDDP(GenericTrainerDDP):
         self.train_fnames = []
 
         # Expect these to be there for the case of using diff kinds of training data for the same
-        # model; hard negatives models, different alignment models and so on.
+        # model; hard negatives facetid_models, different alignment facetid_models and so on.
         if 'train_suffix' in train_hparams:
             suffix = train_hparams['train_suffix']
             train_basename = 'train-{:s}'.format(suffix)

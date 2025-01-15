@@ -1,5 +1,5 @@
 """
-Utilities to feed and initialize the models.
+Utilities to feed and initialize the facetid_models.
 """
 from __future__ import unicode_literals
 from __future__ import print_function
@@ -14,7 +14,7 @@ def batched_loss_ddp(model, batcher, loss_helper, logger, batch_size, ex_fnames,
     Make predictions batch by batch.
     :param model: the model object with a predict method.
     :param batcher: reference to model_utils.Batcher class.
-    :param loss_helper: function; models return dict with different loss components
+    :param loss_helper: function; facetid_models return dict with different loss components
         which the loss helper knows how to handle.
     :param batch_size: int; number of docs to consider in a batch.
     :param ex_fnames: dict; which the batcher understands as having example
@@ -54,7 +54,7 @@ def batched_loss_ddp(model, batcher, loss_helper, logger, batch_size, ex_fnames,
 #     Make predictions batch by batch.
 #     :param model: the model object with a predict method.
 #     :param batcher: reference to model_utils.Batcher class.
-#     :param loss_helper: function; models return dict with different loss components
+#     :param loss_helper: function; facetid_models return dict with different loss components
 #         which the loss helper knows how to handle.
 #     :param batch_size: int; number of docs to consider in a batch.
 #     :param ex_fnames: dict; which the batcher understands as having example
@@ -113,7 +113,7 @@ def batched_loss(model, batcher, loss_helper, batch_size, ex_fnames, num_example
     Make predictions batch by batch.
     :param model: the model object with a predict method.
     :param batcher: reference to model_utils.Batcher class.
-    :param loss_helper: function; models return dict with different loss components
+    :param loss_helper: function; facetid_models return dict with different loss components
         which the loss helper knows how to handle.
     :param batch_size: int; number of docs to consider in a batch.
     :param ex_fnames: dict; which the batcher understands as having example

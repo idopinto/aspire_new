@@ -41,7 +41,7 @@ def consume_prefix_in_state_dict_if_present(state_dict, prefix):
 def generic_save_function_ddp(model, save_path, model_suffix):
     """
     Model saving function used in the training loop.
-    This is saving with the assumption that non DDP models will use this model.
+    This is saving with the assumption that non DDP facetid_models will use this model.
     """
     model_fname = os.path.join(save_path, f'model_{model_suffix}.pt')
     model = copy.deepcopy(model.state_dict())

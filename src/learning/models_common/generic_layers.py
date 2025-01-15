@@ -1,5 +1,5 @@
 """
-Generic layers used across models.
+Generic layers used across facetid_models.
 """
 import torch
 from torch import nn as nn

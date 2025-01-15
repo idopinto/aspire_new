@@ -1,5 +1,5 @@
 """
-Generate rankings over randidates for queries for different datasets and trained models
+Generate rankings over randidates for queries for different datasets and trained facetid_models
 or baselines. There are three types of functions here: one assumes a set of embeddings
 from a model stored to disk and ranks based on distance/similarity metrics of these
 embeddings, another type of function uses a more complex late interaction method for
@@ -26,15 +26,15 @@ from scipy import spatial
 from transformers import AutoModel, AutoTokenizer
 
 import src.pre_process.data_utils as du
-from src.learning.models import disent_models
+from src.learning.facetid_models import disent_models
 from src.learning import batchers
-# from . import data_utils as du
-# from ..learning.facetid_models import disent_models
-# from ..learning import batchers
 
 # https://stackoverflow.com/a/46635273/3262406
 np.set_printoptions(suppress=True)
-
+ENCODE_BATCH_SIZE = 32
+SCORE_BATCH_SIZE = 64
+def get_detailed_instruct(task_description: str, title: str) -> str:
+    return f'Instruct: {task_description}\nTitle: {title}'
 
 class CachingTrainedScoringModel:
     """
@@ -42,7 +42,6 @@ class CachingTrainedScoringModel:
     """
 
     def __init__(self, model_name, trained_model_path, model_version='cur_best'):
-
         # Load label maps and configs.
         with codecs.open(os.path.join(trained_model_path, 'run_info.json'), 'r', 'utf-8') as fp:
             run_info = json.load(fp)
@@ -82,7 +81,7 @@ class CachingTrainedScoringModel:
         """
         joblib.dump(self.pid2model_reps, out_fname, compress=('gzip', 3))
 
-    def predict(self, query_pid, cand_pids, pid2abstract, facet='all'):
+    def predict(self, query_pid, cand_pids, pid2abstract, facet='all', instruct=False):
         """
         Use trained model to return scores between query and candidate.
         :param query_pid: string
@@ -91,14 +90,15 @@ class CachingTrainedScoringModel:
         :param facet: string; {'all', 'background', 'method', 'result'}
         :return:
         """
+        encode_batch_size = ENCODE_BATCH_SIZE
         # Gets reps of uncached documents.
-        encode_batch_size = 32
         uncached_pids = [cpid for cpid in cand_pids if cpid not in self.pid2model_reps]
         if query_pid not in self.pid2model_reps: uncached_pids.append(query_pid)
         if uncached_pids:
             batch_docs = []
             batch_pids = []
             for i, pid in enumerate(uncached_pids):
+                # Always use unwrapped versions for caching.
                 batch_docs.append({'TITLE': pid2abstract[pid]['title'],
                                    'ABSTRACT': pid2abstract[pid]['abstract']})
                 batch_pids.append(pid)
@@ -106,7 +106,7 @@ class CachingTrainedScoringModel:
                     logging.info(f'Encoding: {i}/{len(uncached_pids)}')
                 if len(batch_docs) == encode_batch_size:
                     batch_dict = self.batcher.make_batch(raw_feed={'query_texts': batch_docs},
-                                                         pt_lm_tokenizer=self.tokenizer, instruct=True)
+                                                         pt_lm_tokenizer=self.tokenizer)
                     with torch.no_grad():
                         batch_rep_dicts = self.model.caching_encode(batch_dict)
                     assert (len(batch_pids) == len(batch_rep_dicts))
@@ -116,7 +116,7 @@ class CachingTrainedScoringModel:
                     batch_pids = []
             if batch_docs:  # Last batch.
                 batch_dict = self.batcher.make_batch(raw_feed={'query_texts': batch_docs},
-                                                     pt_lm_tokenizer=self.tokenizer,instruct=True)
+                                                     pt_lm_tokenizer=self.tokenizer)
                 with torch.no_grad():
                     batch_rep_dicts = self.model.caching_encode(batch_dict)
                 assert (len(batch_pids) == len(batch_rep_dicts))
@@ -132,8 +132,22 @@ class CachingTrainedScoringModel:
             # Select only the query sentence reps.
             query_rep['sent_reps'] = query_rep['sent_reps'][qf_idxs, :]
         else:
-            query_rep = self.pid2model_reps[query_pid]
-        score_batch_size = 64
+            # Use wrapped query for scoring but not for caching.
+            # query_doc = wrap_query_with_instruct(pid2abstract, query_pid, instruct=instruct)
+            # Dynamically wrap the cached query representation with the instruction for scoring.
+            with torch.no_grad():
+                query_doc = {'TITLE': pid2abstract[query_pid]['title'],
+                                               'ABSTRACT': pid2abstract[query_pid]['abstract']}
+                batch_dict = self.batcher.make_batch(
+                    raw_feed={'query_texts': [query_doc]},
+                    pt_lm_tokenizer=self.tokenizer,
+                    instruct=instruct
+                )
+                wrapped_query_rep = self.model.caching_encode(batch_dict)[0]
+            # query_rep = self.pid2model_reps[query_pid]
+
+
+        score_batch_size = SCORE_BATCH_SIZE
         cand_batch = []
         cand_scores = []
         pair_sm = []
@@ -143,23 +157,36 @@ class CachingTrainedScoringModel:
                 logging.info(f'Scoring: {ci}/{len(cand_pids)}')
             if len(cand_batch) == score_batch_size:
                 with torch.no_grad():
-                    score_dict = self.model.caching_score(query_encode_ret_dict=query_rep,
+                    score_dict = self.model.caching_score(query_encode_ret_dict=wrapped_query_rep,
                                                           cand_encode_ret_dicts=cand_batch)
                 cand_scores.extend(score_dict['batch_scores'].tolist())
                 pair_sm.extend(score_dict['pair_scores'])
                 cand_batch = []
         if cand_batch:  # Handle final few candidates.
             with torch.no_grad():
-                score_dict = self.model.caching_score(query_encode_ret_dict=query_rep,
+                score_dict = self.model.caching_score(query_encode_ret_dict=wrapped_query_rep,
                                                       cand_encode_ret_dicts=cand_batch)
             cand_scores.extend(score_dict['batch_scores'].tolist())
             pair_sm.extend(score_dict['pair_scores'])
         ret_dict = {'cand_scores': cand_scores, 'pair_scores': pair_sm}
         return ret_dict
 
+# def wrap_query_with_instruct(pid2abstract, query_pid, instruct=False):
+#     if instruct:
+#         task_description = "Retrieve semantically similar scientific papers."
+#         query_doc = {
+#             'TITLE': get_detailed_instruct(task_description=task_description, title=pid2abstract[query_pid]['title']),
+#             'ABSTRACT': pid2abstract[query_pid]['abstract']
+#         }
+#     else:
+#         query_doc = {
+#             'TITLE': pid2abstract[query_pid]['title'],
+#             'ABSTRACT': pid2abstract[query_pid]['abstract']
+#         }
+#     return query_doc
 
 def caching_scoringmodel_rank_pool_sent(root_path, trained_model_path, sent_rep_type,
-                                        dataset, run_name):
+                                        dataset, instruct=False, model_version="cur_best"):
     """
     Given a pool of candidates re-rank the pool based on the model scores.
     Function for use when model classes provide methods to encode data, and then score
@@ -170,15 +197,17 @@ def caching_scoringmodel_rank_pool_sent(root_path, trained_model_path, sent_rep_
     :param sent_rep_type: string; {'sbtinybertsota', 'sbrobertanli'}
     :return: write to disk.
     """
-    reps_path = os.path.join(root_path, sent_rep_type, run_name)
+    run_name = trained_model_path.split('/')[-1]
+    instruct_str = 'instruct' if instruct else 'no_instruct'
+    reps_path = os.path.join(root_path, sent_rep_type, f"{run_name}-{model_version}-{instruct_str}")
+    os.makedirs(reps_path, exist_ok=True)
     pool_fname = os.path.join(root_path, f'test-pid2anns-{dataset}.json')
     with codecs.open(pool_fname, 'r', 'utf-8') as fp:
         qpid2pool = json.load(fp)
     query_pids = [qpid for qpid in qpid2pool.keys() if qpid in qpid2pool]
-    logging.info('Read anns: {:}; total: {:}; valid: {:}'.
-                 format(dataset, len(qpid2pool), len(query_pids)))
+    logging.info(f'Read anns: {dataset}; total: {len(qpid2pool)}; valid: {len(query_pids)}')
     # Load trained model.
-    model = CachingTrainedScoringModel(model_name=sent_rep_type, trained_model_path=trained_model_path)
+    model = CachingTrainedScoringModel(model_name=sent_rep_type, trained_model_path=trained_model_path, model_version=model_version)
 
     # Read in abstracts for printing readable.
     pid2abstract = {}
@@ -197,7 +226,7 @@ def caching_scoringmodel_rank_pool_sent(root_path, trained_model_path, sent_rep_
                               'w', 'utf-8')
         cand_pids = qpid2pool[qpid]['cands']
         cand_pid_rels = qpid2pool[qpid]['relevance_adju']
-        ret_dict = model.predict(query_pid=qpid, cand_pids=cand_pids, pid2abstract=pid2abstract)
+        ret_dict = model.predict(query_pid=qpid, cand_pids=cand_pids, pid2abstract=pid2abstract, instruct=instruct)
         cand_scores = ret_dict['cand_scores']
         pair_softmax = ret_dict['pair_scores']
         assert (len(cand_pids) == len(cand_scores))
@@ -231,7 +260,7 @@ def caching_scoringmodel_rank_pool_sent(root_path, trained_model_path, sent_rep_
                                           ranked_pair_sim_strings=ranked_pair_sim_strings)
         resfile.close()
     logging.info('Ranking candidates took: {:.4f}s'.format(time.time() - start))
-    model.save_cache(out_fname=os.path.join(reps_path, f'pid2model_reps-{dataset}-{sent_rep_type}.pickle'))
+    # model.save_cache(out_fname=os.path.join(reps_path, f'pid2model_reps-{dataset}-{sent_rep_type}.pickle'))
     with codecs.open(os.path.join(reps_path, f'test-pid2pool-{dataset}-{sent_rep_type}-ranked.json'),
                      'w', 'utf-8') as fp:
         json.dump(query2rankedcands, fp)
@@ -679,6 +708,11 @@ def main():
     dataset_rank_pool.add_argument('--log_fname',
                                    help='File name for the log file to which logs get written.')
     dataset_rank_pool.add_argument('--caching_scorer', action="store_true", default=False)
+    dataset_rank_pool.add_argument('--instruct', action="store_true", default=False)
+    dataset_rank_pool.add_argument('--model_version', default='cur_best',
+                                   choices=['cur_best', 'best', 'init','final'],
+                                   help='The model version to use.')
+
     cl_args = parser.parse_args()
 
     # If a log file was passed then write to it.
@@ -693,9 +727,8 @@ def main():
                             stream=sys.stdout)
         # Print the called script and its args to the log.
         logging.info(' '.join(sys.argv))
-    # rank_pool --root_path /cs/labs/tomhope/idopinto12/aspire/datasets/eval/Relish --run_name ts_aspire_biomed --rep_type sbalisentbienc --model_path /cs/labs/tomhope/idopinto12/aspire/runs/models/ts-aspire-biomed-train-19450412 --dataset relish --caching_scorer
     if cl_args.subcommand == 'rank_pool':
-        if cl_args.rep_type in {'sbalisentbienc'}:
+        if cl_args.rep_type in {'sbalisentbienc','gte-Qwen2-1.5B-instruct-ts-aspire'}:
             data_to_read = 'sent'
         else:
             data_to_read = 'abstract'
@@ -711,16 +744,20 @@ def main():
                                          run_name=cl_args.run_name)
             elif cl_args.rep_type in {'sbalisentbienc','gte-Qwen2-1.5B-instruct-ts-aspire'} and cl_args.caching_scorer:
                 caching_scoringmodel_rank_pool_sent(
-                    root_path=cl_args.root_path, sent_rep_type=cl_args.rep_type, dataset=cl_args.dataset,
-                    run_name=cl_args.run_name, trained_model_path=cl_args.model_path)
+                    root_path=cl_args.root_path,
+                    sent_rep_type=cl_args.rep_type,
+                    dataset=cl_args.dataset,
+                    trained_model_path=cl_args.model_path,
+                    instruct=cl_args.instruct,
+                    model_version=cl_args.model_version
+                )
             else:
                 rank_pool(root_path=cl_args.root_path, sent_rep_type=cl_args.rep_type,
                           data_to_read=data_to_read, dataset=cl_args.dataset, run_name=cl_args.run_name)
 
 '''
- python3 -m src.pre_process.pp_score_ts_aspire rank_pool --root_path /cs/labs/tomhope/idopinto12/aspire/datasets/eval/Relish --run_name gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --rep_type gte-Qwen2-1.5B-instruct-ts-aspire --model_path /cs/labs/tomhope/idopinto12/aspire_new/runs/models/gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --dataset relish --caching_scorer
- python3 -m src.pre_process.pp_score_ts_aspire rank_pool --root_path /cs/labs/tomhope/idopinto12/aspire/datasets/eval/TRECCOVID-RF --run_name gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --rep_type gte-Qwen2-1.5B-instruct-ts-aspire --model_path /cs/labs/tomhope/idopinto12/aspire_new/runs/models/gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --dataset treccovid --caching_scorer
-
+ python3 -m src.pre_process.pp_score_ts_aspire rank_pool --root_path /cs/labs/tomhope/idopinto12/aspire/datasets/eval/Relish --run_name gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --rep_type gte-Qwen2-1.5B-instruct-ts-aspire --model_path /cs/labs/tomhope/idopinto12/aspire_new/runs/facetid_models/gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --dataset relish --caching_scorer --instruct
+ python3 -m src.pre_process.pp_score_ts_aspire rank_pool --root_path /cs/labs/tomhope/idopinto12/aspire/datasets/eval/TRECCOVID-RF --run_name gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --rep_type gte-Qwen2-1.5B-instruct-ts-aspire --model_path /cs/labs/tomhope/idopinto12/aspire_new/runs/facetid_models/gte-Qwen2-1.5B-instruct-ts-aspire_s2orcbiomed_2025-01-05_02 --dataset treccovid --caching_scorer --instruct
 '''
 if __name__ == '__main__':
     main()

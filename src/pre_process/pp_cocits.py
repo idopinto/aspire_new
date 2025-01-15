@@ -195,7 +195,7 @@ def filter_cocitation_papers(run_path, dataset):
 
 def filter_cocitation_sentences(run_path, dataset):
     """
-    Generate data to train sentence level "paraphrasing" models like SentBERT.
+    Generate data to train sentence level "paraphrasing" facetid_models like SentBERT.
     For papers which are cocited cited more than once:
     - the number of tokens in the citation context.
     - if the citation context was supriously tagged as a citation context:
@@ -368,11 +368,11 @@ def generate_examples_aligned_cocitabs_rand(in_path, out_path, dataset, alignmen
         sent_alignment_model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
         # logger.debug(os.system("nvidia-smi"))
         # logger.info(sent_alignment_model)
-        # word_embedding_model = models.Transformer('allenai/scibert_scivocab_uncased',
+        # word_embedding_model = facetid_models.Transformer('allenai/scibert_scivocab_uncased',
         #                                           max_seq_length=512)
         # trained_model_fname = os.path.join(trained_model_path, 'sent_encoder_cur_best.pt')
         # word_embedding_model.auto_model.load_state_dict(torch.load(trained_model_fname))
-        # pooling_model = models.Pooling(word_embedding_model.get_word_embedding_dimension(), pooling_mode='cls')
+        # pooling_model = facetid_models.Pooling(word_embedding_model.get_word_embedding_dimension(), pooling_mode='cls')
         # sent_alignment_model = SentenceTransformer(modules=[word_embedding_model, pooling_model])
 
     all_contexts, all_pids = get_all_contexts_and_pids(train_copids, dev_copids, cocitedpids2contexts,train_size, dev_size)
@@ -610,7 +610,7 @@ def main():
     subparsers = parser.add_subparsers(dest=u'subcommand',
                                        help=u'The action to perform.')
 
-    # Filter for abstract level models.
+    # Filter for abstract level facetid_models.
     filter_cocit_papers = subparsers.add_parser('filt_cocit_papers')
     filter_cocit_papers.add_argument('--run_path', required=True,
                                      help='Directory with absfilt cocitation pickle file. '
@@ -618,7 +618,7 @@ def main():
     filter_cocit_papers.add_argument('--dataset', required=True,
                                      choices=['s2orccompsci', 's2orcbiomed'],
                                      help='Files of area to process.')
-    # Filter for sentence level models.
+    # Filter for sentence level facetid_models.
     filter_cocit_sents = subparsers.add_parser('filt_cocit_sents')
     filter_cocit_sents.add_argument('--run_path', required=True,
                                     help='Directory with absfilt cocitation pickle file. '
@@ -626,7 +626,7 @@ def main():
     filter_cocit_sents.add_argument('--dataset', required=True,
                                     choices=['s2orccompsci', 's2orcbiomed'],
                                     help='Files of area to process.')
-    # Write examples for sentence level models.
+    # Write examples for sentence level facetid_models.
     write_example_sents = subparsers.add_parser('write_examples')
     write_example_sents.add_argument('--in_path', required=True,
                                      help='Directory with absfilt cocitation pickle file.')

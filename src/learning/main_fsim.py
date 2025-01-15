@@ -12,15 +12,15 @@ import torch.multiprocessing as torch_mp
 import torch.distributed as dist
 
 from pathlib import Path
-from src.learning import trainer, models, batchers
-from src.learning.models import disent_models
+from src.learning import trainer, facetid_models, batchers
+from src.learning.facetid_models import disent_models
 import wandb
 
 PROJECT_NAME = 'aspire'
 ROOT = Path('/cs/labs/tomhope/idopinto12/aspire_new')
 TRAIN_DATA_DIR = ROOT / 'datasets' / 'train'
 CONFIG_DIR = ROOT / 'config' / 'models_config'
-RUN_DIR = ROOT / 'runs' / 'models'
+RUN_DIR = ROOT / 'runs' / 'facetid_models'
 
 def get_run_path(cl_args):
     run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%Y-%m-%d_%H")}"
@@ -77,7 +77,7 @@ def setup_logging(log_fname: str = None):
     logging.info(' '.join(sys.argv))
 
 def get_model(model_name, all_hparams):
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire'}:
+    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
         return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
     else:
         logging.error(f'Unknown model: {model_name}')
@@ -100,7 +100,7 @@ def save_config(all_hparams, run_path):
 
 def get_batcher(model_name, all_hparams):
     # Select appropriate batcher class.
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire'}:
+    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
         batcher = batchers.AbsSentTokBatcherPreAlign
         batcher.align_type = all_hparams.get('align_type', 'cc_align')
         batcher.config_str = all_hparams['base-pt-layer']
@@ -144,63 +144,64 @@ def ddp_train_model(process_rank, cl_args):
     # print(f"Process rank {process_rank},pid={os.getpid()}, checkpoint: setup_ddp")
     setup_ddp(rank=process_rank, world_size=cl_args.num_gpus)
     # print(f"Process rank {process_rank},pid={os.getpid()}, checkpoint: setup_ddp completed")
-    if  process_rank > 0:
-        os.environ["WANDB_MODE"] = "offline"
-        logger = None
-    elif process_rank == 0:
-        init_wandb(all_hparams, run_name)
-        logger = get_logger()
-        # Save hyperparams to disk from a single process.
-        run_info = {'all_hparams': all_hparams}
-        with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
-            json.dump(run_info, fp)
+    try:
+        if  process_rank > 0:
+            os.environ["WANDB_MODE"] = "offline"
+            logger = None
+        elif process_rank == 0:
+            init_wandb(all_hparams, run_name)
+            logger = get_logger()
+            # Save hyperparams to disk from a single process.
+            run_info = {'all_hparams': all_hparams}
+            with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
+                json.dump(run_info, fp)
 
-    model = get_model(model_name, all_hparams)
-    model.model_name = model_name # for backward compatiblity
-    model = model.to(process_rank)
+        model = get_model(model_name, all_hparams)
+        model.model_name = model_name # for backward compatiblity
+        model = model.to(process_rank)
 
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model initialized")
-    if process_rank == 0:
-        # Save an untrained model version.
-        trainer.generic_save_function_ddp(model=model, save_path=run_path, model_suffix='init')
-        logger.info(f"Process rank {process_rank},pid={os.getpid()},checkpoint: initial model saved")
-    assert torch.cuda.current_device() == process_rank, "Incorrect GPU assignment"
-    model = ddp(model, device_ids=[process_rank], find_unused_parameters=True)
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model initialized")
+        if process_rank == 0:
+            # Save an untrained model version.
+            trainer.generic_save_function_ddp(model=model, save_path=run_path, model_suffix='init')
+            logger.info(f"Process rank {process_rank},pid={os.getpid()},checkpoint: initial model saved")
+        assert torch.cuda.current_device() == process_rank, "Incorrect GPU assignment"
+        model = ddp(model, device_ids=[process_rank], find_unused_parameters=True)
 
-    # # Move model to the GPU.
-    # if torch.cuda.is_available():
-        # model.cuda(process_rank)
-        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: moved to GPU.")
-        # if process_rank == 0: logger.info('Running on GPU.')
+        # # Move model to the GPU.
+        # if torch.cuda.is_available():
+            # model.cuda(process_rank)
+            # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: moved to GPU.")
+            # if process_rank == 0: logger.info('Running on GPU.')
 
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp model initialized")
-    batcher = get_batcher(model_name, all_hparams)
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: batcher initialized.")
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp model initialized")
+        batcher = get_batcher(model_name, all_hparams)
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: batcher initialized.")
 
-    model_trainer = trainer.BasicRankingTrainerDDP(logger=logger,
-                                                   process_rank=process_rank,
-                                                   num_gpus=cl_args.num_gpus,
-                                                   model=model,
-                                                   batcher=batcher,
-                                                   data_path=TRAIN_DATA_DIR,
-                                                   model_path=run_path,
-                                                   early_stop=True,
-                                                   verbose=True,
-                                                   dev_score='loss',
-                                                   train_hparams=all_hparams)
-    model_trainer.save_function = trainer.generic_save_function_ddp
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model_trainer initialized.")
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: start training.")
-    model_trainer.train()
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: training finished.")
-    # Synchronize before cleanup
-    dist.barrier()
-    # Cleanup DDP
-    cleanup_ddp()
-    # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp cleaned.")
-
-    if process_rank == 0:
-        wandb.finish()
+        model_trainer = trainer.BasicRankingTrainerDDP(logger=logger,
+                                                       process_rank=process_rank,
+                                                       num_gpus=cl_args.num_gpus,
+                                                       model=model,
+                                                       batcher=batcher,
+                                                       data_path=TRAIN_DATA_DIR,
+                                                       model_path=run_path,
+                                                       early_stop=True,
+                                                       verbose=True,
+                                                       dev_score='loss',
+                                                       train_hparams=all_hparams)
+        model_trainer.save_function = trainer.generic_save_function_ddp
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model_trainer initialized.")
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: start training.")
+        model_trainer.train()
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: training finished.")
+        # Synchronize before cleanup
+        dist.barrier()
+    finally:
+        # Cleanup DDP
+        cleanup_ddp()
+        # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp cleaned.")
+        if process_rank == 0:
+            wandb.finish()
 
 
 
@@ -260,7 +261,7 @@ def main():
     train_args = subparsers.add_parser('train_model')
     train_args.add_argument('--model_name', required=True,
                             choices=['cospecter', 'miswordbienc',
-                                     'miswordpolyenc', 'sbalisentbienc', 'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire'],
+                                     'miswordpolyenc', 'sbalisentbienc', 'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire',"gte-Qwen2-7B-instruct-ts-aspire"],
                             help='The name of the model to train.')
     train_args.add_argument('--dataset', required=True,
                             choices=['s2orcscidocs', 's2orccompsci', 's2orcbiomed', 'relish', 'treccovid'],
