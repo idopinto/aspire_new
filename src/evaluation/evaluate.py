@@ -11,6 +11,7 @@ from src.evaluation.utils.metrics import compute_metrics
 import sys
 import logging
 from datetime import datetime
+import torch
 
 
 def encode(model: SimilarityModel, dataset: EvalDataset):

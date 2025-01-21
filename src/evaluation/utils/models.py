@@ -326,7 +326,7 @@ class TrainedInstructAbstractModel(SimilarityModel):
 
 class TrainedTSAspireModel(SimilarityModel):
     """
-    Loads and runs bio-med tsAspire based on decoder-only instruction tuned base model.
+    Loads and runs biomed tsAspire based on decoder-only instruction tuned base model.
     """
     # model names mapped to their model class
     MODEL_CLASSES = {
@@ -379,6 +379,8 @@ class TrainedTSAspireModel(SimilarityModel):
         # forward through model
         with torch.inference_mode():
             batch_dict = self.model.encode(batch_dict=batch_dict)
+        if query_instruct:
+            return torch.Tensor(batch_dict['sent_reps'][0])
         return batch_dict['sent_reps']
 
 def get_model(model_name, trained_model_path=None) -> SimilarityModel:
