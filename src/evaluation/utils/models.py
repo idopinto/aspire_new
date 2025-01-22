@@ -263,6 +263,7 @@ class AspireNER(AspireModel):
             input_sample = {'TITLE': sample['TITLE'],
                             'ABSTRACT': sample['ABSTRACT'] + ner_list
                             } # some entities will be truncated if abstract exceeds total of 500 tokens?
+
             input_batch_with_ner.append(input_sample)
         return input_batch_with_ner
 
