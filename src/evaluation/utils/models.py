@@ -414,6 +414,7 @@ class BertNER(BertMLM):
             entity_sentences = '. '.join(ner_list)
             title_abstract_entities = title_abstract + ' ' + entity_sentences + '.'
             batch.append(title_abstract_entities)
+
         return batch
 
 class InstructSimilarityModel(SimilarityModel):
