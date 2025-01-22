@@ -19,6 +19,10 @@ import json
 import os
 from typing import List, Dict, Union
 from src.evaluation.utils.datasets import EvalDataset
+from examples import ex_aspire_consent_multimatch
+from examples import ex_aspire_consent
+# from examples.ex_aspire_consent_multimatch import AspireConSent, AllPairMaskedWasserstein
+# from examples.ex_aspire_consent import AspireConSent, prepare_abstracts
 
 class SimilarityModel(metaclass=ABCMeta):
     """
@@ -167,6 +171,94 @@ class SimilarityModel(metaclass=ABCMeta):
         if hasattr(self, 'cache') and self.cache is not None:
             self.cache.close()
 
+class AspireModel(SimilarityModel):
+    """
+    Loads and runs otAspire and tsAspire models seen in the paper that are based on BERT.
+    """
+
+    # paths to two models uploaded, trained for the compsci and biomed data, respectively
+    MODEL_PATHS = {
+        'compsci_ot': 'allenai/aspire-contextualsentence-multim-compsci',
+        'biomed_ot': 'allenai/aspire-contextualsentence-multim-biomed',
+        'compsci_ts': 'allenai/aspire-contextualsentence-singlem-compsci',
+        'biomed_ts': 'allenai/aspire-contextualsentence-singlem-biomed',
+    }
+
+    def __init__(self, **kwargs):
+        super(AspireModel, self).__init__(**kwargs)
+
+        # load compsci/biomed model based on name
+        self.model_type =self.name.split('_')[-1]
+        dataset_type = self.name.split('_')[-2]
+        model_path = AspireModel.MODEL_PATHS[dataset_type]
+        if self.model_type == 'ot':
+            self.model = ex_aspire_consent_multimatch.AspireConSent(model_path)
+        elif self.model_type == 'ts':
+            self.model = ex_aspire_consent.AspireConSent(model_path)
+        else:
+            raise "Not a valid model type. should be 'ot' or 'ts'"
+        self.model.eval()
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path)
+
+    def get_similarity(self, x: Union[Tensor, np.ndarray], y: Union[Tensor, np.ndarray]):
+        # calculates optimal transport between the two encodings
+        if self.model_type == 'ot':
+            dist_func = ex_aspire_consent_multimatch.AllPairMaskedWasserstein({})
+            rep_len_tup = namedtuple('RepLen', ['embed', 'abs_lens'])
+            xt = rep_len_tup(embed=x[None, :].permute(0, 2, 1), abs_lens=[len(x)])
+            yt = rep_len_tup(embed=y[None, :].permute(0, 2, 1), abs_lens=[len(y)])
+            ot_dist = dist_func.compute_distance(query=xt, cand=yt).item()
+            return -ot_dist
+        elif self.model_type == 'ts':
+            pair_dists = -1 * torch.cdist(x, y)
+            return torch.max(pair_dists).item()
+        else:
+            raise "Not a valid model type. should be 'ot' or 'ts'"
+
+    def encode(self, batch_papers: List[Dict], query_instruct=False):
+        # prepare input
+        if self.model_type == 'ot':
+            prepare_abstracts = ex_aspire_consent_multimatch.prepare_abstracts
+        elif self.model_type == 'ts':
+            prepare_abstracts = ex_aspire_consent.prepare_abstracts
+        else:
+            raise "Not a valid model type. should be 'ot' or 'ts'"
+
+        bert_batch, abs_lens, sent_token_idxs = prepare_abstracts(batch_abs=batch_papers,
+                                                                  pt_lm_tokenizer=self.tokenizer)
+        # forward through model
+        with torch.no_grad():
+            _, batch_reps_sent = self.model.forward(bert_batch=bert_batch,
+                                                    abs_lens=abs_lens,
+                                                    sent_tok_idxs=sent_token_idxs)
+            batch_reps = [batch_reps_sent[i, :abs_lens[i]] for i in range(len(abs_lens))]
+        return batch_reps
+
+
+class AspireNER(AspireModel):
+    """
+    An implementation of the ot_aspire models,
+    where NER entities which were extracted from the sentences of the abstract are added
+    as new sentences to the abstract.
+    Testing on csfcube suggests improved results when using this form of Input Augmentation.
+    """
+    def encode(self, batch_papers: List[Dict], query_instruct=False):
+        assert 'ENTITIES' in batch_papers[0], 'No NER data for input. Please run NER/extract_entity.py or extract_biomedical_entities.py and' \
+                                             ' place result in {dataset_dir}/{dataset_name}-ner.jsonl'
+        input_batch_with_ner = self._append_entities(batch_papers)
+        return super(AspireNER, self).encode(input_batch_with_ner)
+
+    def _append_entities(self, batch_papers):
+        # append ners to abstract end as new sentences
+        input_batch_with_ner = []
+        for sample in batch_papers:
+            ner_list = [item for sublist in sample['ENTITIES'] for item in sublist]
+            input_sample = {'TITLE': sample['TITLE'],
+                            'ABSTRACT': sample['ABSTRACT'] + ner_list
+                            }
+            input_batch_with_ner.append(input_sample)
+        return input_batch_with_ner
+
 class InstructSimilarityModel(SimilarityModel):
     """
     Encodings of abstracts based on Qwen2-1.5B-instruct.
@@ -183,7 +275,7 @@ class InstructSimilarityModel(SimilarityModel):
         super(InstructSimilarityModel, self).__init__(**kwargs)
         full_name = InstructSimilarityModel.MODEL_PATHS[self.name]
         self.tokenizer = AutoTokenizer.from_pretrained(full_name)
-        self.max_seq_len = 512 # was 500
+        self.max_seq_len = 512 # was 500 for instruction tokens
         self.model = AutoModel.from_pretrained(full_name,
                                                  torch_dtype=torch.bfloat16,
                                                  trust_remote_code=True,
@@ -390,8 +482,8 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     :param trained_model_path: If a trained model, supply path to the training
     :return: SimilarityModel
     """
-    # if model_name in {'aspire_compsci', 'aspire_biomed'}:
-    #     return AspireModel(name=model_name, encoding_type='sentence')
+    if model_name in {'aspire_compsci_ot', 'aspire_biomed_ot','aspire_compsci_ts', 'aspire_biomed_ts'}:
+        return AspireModel(name=model_name, encoding_type='sentence') # OTAspire
     # elif model_name == 'specter':
     #     return BertMLM(name=model_name, encoding_type='abstract')
     # elif model_name in {'supsimcse', 'unsupsimcse'}:
@@ -400,8 +492,8 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     #     return BertNER(name=model_name, encoding_type='abstract')
     # elif model_name in {'sbtinybertsota', 'sbrobertanli', 'sbmpnet1B'}:
     #     return SentenceModel(name=model_name, encoding_type='sentence')
-    # elif model_name in {'aspire_ner_compsci', 'aspire_ner_biomed'}:
-    #     return AspireNER(name=model_name, encoding_type='sentence-entity')
+    elif model_name in {'aspire_ner_compsci', 'aspire_ner_biomed'}:
+        return AspireNER(name=model_name, encoding_type='sentence-entity')
     # elif model_name in {'aspire_context_ner_compsci', 'aspire_context_ner_biomed'}:
     #     return AspireContextNER(name=model_name, encoding_type='sentence-entity')
     # elif model_name == 'cospecter':
@@ -412,7 +504,7 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     #     return TrainedSentModel(name=model_name,
     #                             trained_model_path=trained_model_path,
     #                             encoding_type='sentence')
-    if model_name in {'gte-qwen2-1.5B-instruct'}:
+    elif model_name in {'gte-qwen2-1.5B-instruct'}:
         return InstructSimilarityModel(name=model_name,encoding_type='abstract')
     elif model_name in {'gte-qwen2-1.5B-instruct-biomed-co-cite'}:
         return TrainedInstructAbstractModel(name=model_name,trained_model_path=trained_model_path,encoding_type='abstract')

@@ -81,7 +81,6 @@ def shuffle_jsonl_epochs(dataset_file, output_dir, num_epochs, suffix):
 
 
 # Shuffle the JSONL file
-
 def print_shapes():
     for dataset_file in ['/cs/labs/tomhope/idopinto12/aspire_new/datasets/train/shuffled_data/train-cocitabsalign-0.jsonl']:
         print(f"Loading dataset from {dataset_file}")
