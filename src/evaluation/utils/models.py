@@ -252,12 +252,20 @@ class AspireNER(AspireModel):
         # append ners to abstract end as new sentences
         input_batch_with_ner = []
         for sample in batch_papers:
-            ner_list = [item for sublist in sample['ENTITIES'] for item in sublist]
+            ner_list = []
+            if isinstance(sample['ABSTRACT'], list):
+                ner_list = [item for sublist in sample['ENTITIES'] for item in sublist]
+            elif isinstance(sample['ABSTRACT'], dict):
+                # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
+                # in this case we don't know in which sentence the entity appeared (could be more than once)
+                # if we want the context of entity, we can get from all occurrences
+                ner_list = sample['ENTITIES'].keys()
             input_sample = {'TITLE': sample['TITLE'],
                             'ABSTRACT': sample['ABSTRACT'] + ner_list
-                            }
+                            } # some entities will be truncated if abstract exceeds total of 500 tokens?
             input_batch_with_ner.append(input_sample)
         return input_batch_with_ner
+
 
 class InstructSimilarityModel(SimilarityModel):
     """
@@ -492,7 +500,7 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     #     return BertNER(name=model_name, encoding_type='abstract')
     # elif model_name in {'sbtinybertsota', 'sbrobertanli', 'sbmpnet1B'}:
     #     return SentenceModel(name=model_name, encoding_type='sentence')
-    elif model_name in {'aspire_ner_compsci', 'aspire_ner_biomed'}:
+    elif model_name in {'aspire_ner_compsci_ot', 'aspire_ner_biomed_ot','aspire_ner_compsci_ts', 'aspire_ner_biomed_ts'}:
         return AspireNER(name=model_name, encoding_type='sentence-entity')
     # elif model_name in {'aspire_context_ner_compsci', 'aspire_context_ner_biomed'}:
     #     return AspireContextNER(name=model_name, encoding_type='sentence-entity')
