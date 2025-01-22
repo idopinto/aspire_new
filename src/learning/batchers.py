@@ -85,6 +85,7 @@ class SentTripleBatcher(GenericBatcher):
             self.pos_ex_file = codecs.open(pos_ex_fname, 'r', encoding='utf-8')  # TODO
             # self.pos_ex_file = open(pos_ex_fname, 'r', encoding='utf-8')
         self.pt_lm_tokenizer = AutoTokenizer.from_pretrained(self.config_str)
+
     def next_batch(self):
         """
         Yield the next batch. Based on whether its train_mode or not yield a
