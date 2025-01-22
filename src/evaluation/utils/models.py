@@ -263,10 +263,158 @@ class AspireNER(AspireModel):
             input_sample = {'TITLE': sample['TITLE'],
                             'ABSTRACT': sample['ABSTRACT'] + ner_list
                             } # some entities will be truncated if abstract exceeds total of 500 tokens?
-
             input_batch_with_ner.append(input_sample)
         return input_batch_with_ner
 
+
+class BertMLM(SimilarityModel):
+    """
+    Encodings of abstracts based on BERT.
+    """
+    MODEL_PATHS = {
+            'specter': 'allenai/specter',
+            # Using roberta here causes the tokenizers below to break cause roberta inputs != bert inputs.
+            'supsimcse': 'princeton-nlp/sup-simcse-bert-base-uncased',
+            'unsupsimcse': 'princeton-nlp/unsup-simcse-bert-base-uncased'
+    }
+
+    def __init__(self,**kwargs):
+        super(BertMLM, self).__init__(**kwargs)
+        full_name = BertMLM.MODEL_PATHS[self.name]
+        self.tokenizer = AutoTokenizer.from_pretrained(full_name)
+        self.bert_max_seq_len = 500
+        self.model = AutoModel.from_pretrained(full_name)
+        self.model.config.output_hidden_states = True
+        # if torch.cuda.is_available():
+        #     self.model.cuda()
+        self.model.eval()
+
+    def _prepare_batch(self, batch):
+        """
+        Prepare the batch for Bert.
+        :param batch: list(string); batch of strings.
+        :return:
+        """
+        # Construct the batch.
+        tokenized_batch = []
+        batch_seg_ids = []
+        batch_attn_mask = []
+        seq_lens = []
+        max_seq_len = -1
+        for sent in batch:
+            bert_tokenized_text = self.tokenizer.tokenize(sent)
+            if len(bert_tokenized_text) > self.bert_max_seq_len:
+                bert_tokenized_text = bert_tokenized_text[:self.bert_max_seq_len]
+            # Convert token to vocabulary indices
+            indexed_tokens = self.tokenizer.convert_tokens_to_ids(bert_tokenized_text)
+            # Append CLS and SEP tokens to the text.
+            indexed_tokens = self.tokenizer.build_inputs_with_special_tokens(token_ids_0=indexed_tokens)
+            if len(indexed_tokens) > max_seq_len:
+                max_seq_len = len(indexed_tokens)
+            tokenized_batch.append(indexed_tokens)
+            batch_seg_ids.append([0] * len(indexed_tokens))
+            batch_attn_mask.append([1] * len(indexed_tokens))
+        # Pad the batch.
+        for ids_sent, seg_ids, attn_mask in \
+                zip(tokenized_batch, batch_seg_ids, batch_attn_mask):
+            pad_len = max_seq_len - len(ids_sent)
+            seq_lens.append(len(ids_sent))
+            ids_sent.extend([self.tokenizer.pad_token_id] * pad_len)
+            seg_ids.extend([self.tokenizer.pad_token_id] * pad_len)
+            attn_mask.extend([self.tokenizer.pad_token_id] * pad_len)
+        return torch.tensor(tokenized_batch), torch.tensor(batch_seg_ids), \
+               torch.tensor(batch_attn_mask), torch.FloatTensor(seq_lens)
+
+    def _pre_process_input_batch(self, batch_papers: List[Dict]):
+        # preprocess the input
+        batch = [paper['TITLE'] + ' [SEP] ' + ' '.join(paper['ABSTRACT']) for paper in batch_papers]
+        return batch
+
+    def encode(self, batch_papers: List[Dict], query_instruct=False):
+        input_batch = self._pre_process_input_batch(batch_papers)
+        tokid_tt, seg_tt, attnmask_tt, seq_lens_tt = self._prepare_batch(input_batch)
+        if torch.cuda.is_available():
+            tokid_tt = tokid_tt.cuda()
+            seg_tt = seg_tt.cuda()
+            attnmask_tt = attnmask_tt.cuda()
+            seq_lens_tt = seq_lens_tt.cuda()
+
+        # pass through bert
+        with torch.no_grad():
+            model_out = self.model(tokid_tt, token_type_ids=seg_tt, attention_mask=attnmask_tt)
+            # top_l is [bs x max_seq_len x bert_encoding_dim]
+            top_l = model_out.last_hidden_state
+            batch_reps_cls = top_l[:, 0, :]
+        if torch.cuda.is_available():
+            batch_reps_cls = batch_reps_cls.cpu().data.numpy()
+        return batch_reps_cls
+
+    def get_similarity(self, x: Union[Tensor, np.ndarray], y: Union[Tensor, np.ndarray]):
+        return -euclidean(x, y)
+
+class SimCSE(BertMLM):
+    """
+    Subclass of BERT model, for 'supsimcse' and 'unsupsimcse' models
+    """
+    def encode(self, batch_papers: List[Dict], query_instruct=False):
+        """
+        :param batch:
+        :return:
+        """
+        # pre-process batch
+        batch = []
+        cur_index = 0
+        abs_splits = []
+        for paper in batch_papers:
+            batch += paper['ABSTRACT']
+            cur_index += len(paper['ABSTRACT'])
+            abs_splits.append(cur_index)
+        tokid_tt, seg_tt, attnmask_tt, seq_lens_tt = self._prepare_batch(batch)
+        if torch.cuda.is_available():
+            tokid_tt = tokid_tt.cuda()
+            seg_tt = seg_tt.cuda()
+            attnmask_tt = attnmask_tt.cuda()
+            seq_lens_tt = seq_lens_tt.cuda()
+
+        # pass through model
+        with torch.no_grad():
+            model_out = self.model(tokid_tt, token_type_ids=seg_tt, attention_mask=attnmask_tt)
+            # top_l is [bs x max_seq_len x bert_encoding_dim]
+            batch_reps_pooler = model_out.pooler_output
+            # batch_reps_cls = top_l[:, 0, :]
+        if torch.cuda.is_available():
+            batch_reps_pooler = batch_reps_pooler.cpu().data.numpy()
+            # batch_reps_cls = batch_reps_cls.cpu().data.numpy()
+        # return batch_reps_cls
+        batch_reps = np.split(batch_reps_pooler, abs_splits[:-1])
+        return batch_reps
+
+class BertNER(BertMLM):
+    """
+    An implementation of the Specter model
+    where extracted NER entities are added as sentences to the abstract before creating the embedding.
+    """
+    def __init__(self, name, **kwargs):
+        super(BertNER, self).__init__(name=name.split('_ner')[0], **kwargs)
+        self.name = name
+
+    def _pre_process_input_batch(self, batch_papers: List[Dict]):
+        # preprocess the input
+        batch = []
+        for paper in batch_papers:
+            title_abstract = paper['TITLE'] + ' [SEP] ' + ' '.join(paper['ABSTRACT'])
+            ner_list = []
+            if isinstance(paper['ABSTRACT'], list):
+                ner_list = [item for sublist in paper['ENTITIES'] for item in sublist]
+            elif isinstance(paper['ABSTRACT'], dict):
+                # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
+                # in this case we don't know in which sentence the entity appeared (could be more than once)
+                # if we want the context of entity, we can get from all occurrences
+                ner_list = paper['ENTITIES'].keys()
+            entity_sentences = '. '.join(ner_list)
+            title_abstract_entities = title_abstract + ' ' + entity_sentences + '.'
+            batch.append(title_abstract_entities)
+        return batch
 
 class InstructSimilarityModel(SimilarityModel):
     """
@@ -493,12 +641,12 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     """
     if model_name in {'aspire_compsci_ot', 'aspire_biomed_ot','aspire_compsci_ts', 'aspire_biomed_ts'}:
         return AspireModel(name=model_name, encoding_type='sentence') # OTAspire
-    # elif model_name == 'specter':
-    #     return BertMLM(name=model_name, encoding_type='abstract')
-    # elif model_name in {'supsimcse', 'unsupsimcse'}:
-    #     return SimCSE(name=model_name, encoding_type='abstract')
-    # elif model_name == 'specter_ner':
-    #     return BertNER(name=model_name, encoding_type='abstract')
+    elif model_name == 'specter':
+        return BertMLM(name=model_name, encoding_type='abstract')
+    elif model_name in {'supsimcse', 'unsupsimcse'}:
+        return SimCSE(name=model_name, encoding_type='abstract')
+    elif model_name == 'specter_ner':
+        return BertNER(name=model_name, encoding_type='abstract')
     # elif model_name in {'sbtinybertsota', 'sbrobertanli', 'sbmpnet1B'}:
     #     return SentenceModel(name=model_name, encoding_type='sentence')
     elif model_name in {'aspire_ner_compsci_ot', 'aspire_ner_biomed_ot','aspire_ner_compsci_ts', 'aspire_ner_biomed_ts'}:
