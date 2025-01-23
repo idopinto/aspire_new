@@ -13,7 +13,6 @@ import logging
 from datetime import datetime
 import torch
 
-
 def encode(model: SimilarityModel, dataset: EvalDataset):
     """
     Cache model encodings of an entire dataset
@@ -121,7 +120,6 @@ def evaluate(results_dir: str,
     :return:
     """
     logging.info('Computing metrics')
-
     # load score results
     results = dict()
     if facet == 'all':
@@ -163,7 +161,6 @@ def evaluate(results_dir: str,
     aggregated_metrics = []
     for facet_i in metrics.facet.unique():
         for split in metrics.split.unique():
-            print("hello")
             agg_results = metrics[(metrics.facet == facet_i) & (metrics.split == split)][metric_columns].mean().round(4).to_dict()
             agg_results['mean_av_precision'] = agg_results.pop('av_precision')
             logging.info(f'----------Results for {split}/{facet_i}----------')

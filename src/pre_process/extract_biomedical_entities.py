@@ -50,6 +50,7 @@ def extract_biomed_ners(sentences: List[str], model, resolve_abbrevations=True) 
                 for abrev in sent_abbrevs:
                     if normalized_ent == abrev.text.lower():
                         normalized_ent = abrev._.long_form.text.lower()
+                        break
             if normalized_ent in ents2labels.keys():
                 if ent.label_ != ents2labels[normalized_ent]:
                     ents2labels[normalized_ent] = ent.label_

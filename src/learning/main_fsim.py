@@ -77,7 +77,7 @@ def setup_logging(log_fname: str = None):
     logging.info(' '.join(sys.argv))
 
 def get_model(model_name, all_hparams):
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
+    if model_name in {'gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
         return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
     else:
         logging.error(f'Unknown model: {model_name}')
@@ -100,7 +100,7 @@ def save_config(all_hparams, run_path):
 
 def get_batcher(model_name, all_hparams):
     # Select appropriate batcher class.
-    if model_name in {'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
+    if model_name in {'gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
         batcher = batchers.AbsSentTokBatcherPreAlign
         batcher.align_type = all_hparams.get('align_type', 'cc_align')
         batcher.config_str = all_hparams['base-pt-layer']
@@ -240,7 +240,7 @@ def train_model(cl_args):
         model_path=run_path,
         early_stop=True,
         dev_score='loss',
-        train_hparams=all_hparams
+        train_hparams=all_hparams,
     )
     model_trainer.save_function = trainer.generic_save_function
     vram_allocated, vram_cached = get_vram_usage()

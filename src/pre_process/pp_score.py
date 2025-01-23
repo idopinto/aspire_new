@@ -105,7 +105,7 @@ class CachingTrainedScoringModel:
                 if i % 1000 == 0:
                     logging.info(f'Encoding: {i}/{len(uncached_pids)}')
                 if len(batch_docs) == encode_batch_size:
-                    batch_dict = self.batcher.make_batch(raw_feed={'query_texts': batch_docs},
+                    batch_dict = make_batch(raw_feed={'query_texts': batch_docs},
                                                          pt_lm_tokenizer=self.tokenizer)
                     with torch.no_grad():
                         batch_rep_dicts = self.model.caching_encode(batch_dict)
@@ -115,7 +115,7 @@ class CachingTrainedScoringModel:
                     batch_docs = []
                     batch_pids = []
             if batch_docs:  # Last batch.
-                batch_dict = self.batcher.make_batch(raw_feed={'query_texts': batch_docs},
+                batch_dict = make_batch(raw_feed={'query_texts': batch_docs},
                                                      pt_lm_tokenizer=self.tokenizer)
                 with torch.no_grad():
                     batch_rep_dicts = self.model.caching_encode(batch_dict)
@@ -138,10 +138,10 @@ class CachingTrainedScoringModel:
             with torch.no_grad():
                 query_doc = {'TITLE': pid2abstract[query_pid]['title'],
                                                'ABSTRACT': pid2abstract[query_pid]['abstract']}
-                batch_dict = self.batcher.make_batch(
+                batch_dict = make_batch(
                     raw_feed={'query_texts': [query_doc]},
                     pt_lm_tokenizer=self.tokenizer,
-                    instruct=instruct
+                    query_instruct=instruct
                 )
                 wrapped_query_rep = self.model.caching_encode(batch_dict)[0]
             # query_rep = self.pid2model_reps[query_pid]

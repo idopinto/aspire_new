@@ -73,6 +73,8 @@ class GenericTrainer:
 
         # Model, batcher and the data.
         self.model = model
+        self.bert_like = train_hparams.get('bert_like', True) # for models that are not based on BERT, e.g. gte-qwen2-1.5B-instruct, for compatible batcher
+        self.query_instruct = train_hparams.get('query_instruct', False) # whether or not to wrap the query with instruction. for instruction-tuned models.
         self.batcher = batcher
         self.time_per_batch, self.time_per_dev_pass = 0, 0
         # Different trainer classes can add this based on the data that the model they are training needs.
@@ -126,7 +128,7 @@ class GenericTrainer:
                                          batch_size=self.batch_size)
             # Get the next training batch.
             iters_start = time.time()
-            for batch_doc_ids, batch_dict in epoch_batcher.next_batch():
+            for batch_doc_ids, batch_dict in epoch_batcher.next_batch(query_instruct=self.query_instruct,bert_like=self.bert_like):
                 self.model.train()
                 batch_start = time.time()
                 with torch.amp.autocast('cuda:0', dtype=torch.bfloat16):
@@ -402,6 +404,8 @@ class GenericTrainerDDP:
 
         # Model, batcher and the data.
         self.model = model
+        self.bert_like = train_hparams.get('bert_like', True) # for models that are not based on BERT, e.g. gte-qwen2-1.5B-instruct, for compatible batcher
+        self.query_instruct = train_hparams.get('query_instruct', False) # whether or not to wrap the query with instruction. for instruction-tuned models.
         self.batcher = batcher
         self.time_per_batch = 0
         self.time_per_dev_pass = 0
@@ -451,7 +455,7 @@ class GenericTrainerDDP:
         return dev_score, dev_time
 
     def train_step(self,epoch, epoch_batcher, total_time_per_batch, total_time_per_dev, best_dev_score, best_params, best_epoch, best_iter):
-        for batch_doc_ids, batch_dict in epoch_batcher.next_batch():
+        for batch_doc_ids, batch_dict in epoch_batcher.next_batch(query_instruct=self.query_instruct, bert_like=self.bert_like):
             # print(f"Got batch: {os.getpid()}")
             self.model.train()
             batch_start = time.time()

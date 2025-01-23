@@ -7,6 +7,7 @@ from torch.autograd import Variable
 from torch.nn import functional
 from transformers import AutoModel
 from peft import LoraConfig, get_peft_model
+from ..models_common import generic_layers as gl
 
 from src.learning.facetid_models import pair_distances as pair_dist
 from src.learning.facetid_models.loss_functions import CustomTripletMarginWithDistanceLoss
@@ -32,6 +33,74 @@ def get_dist_function(score_agg_type: str, model_hparams: dict = None):
         return dist_function
     else:
         raise ValueError(f'Unknown aggregation: {score_agg_type}')
+
+
+class MySPECTER(nn.Module):
+    """
+    Pass abstract through SciBERT all in one shot, read off cls token and use
+    it to compute similarities. This is an unfaceted model and is meant to
+    be similar to SPECTER in all aspects:
+    - triplet loss function
+    - only final layer cls bert representation
+    - no SEP tokens in between abstract sentences
+    """
+
+    def __init__(self, model_hparams, bert_config=None):
+        """
+        :param model_hparams: dict(string:int); model hyperparams.
+            num_code_vecs: int; number of code vectors to disentangle into.
+                The number of facets.
+            num_tf_heads: int; number of heads in the context transformer.
+        :param bert_config: transformers.configuration_bert.BertConfig; bert
+            hyperparam instance.
+        """
+        torch.nn.Module.__init__(self)
+        self.bert_config = bert_config
+        self.bert_encoding_dim = 768  # bert_config.hidden_size or DistilBertConfig.dim
+        self.bert_layer_count = 12 + 1  # plus 1 for the bottom most layer.
+        self.bert_encoder = AutoModel.from_pretrained(model_hparams['base-pt-layer'])
+        self.bert_encoder.config.output_hidden_states = True
+        # If fine tune is False then freeze the bert params.
+        if not model_hparams['fine_tune']:
+            for param in self.bert_encoder.base_model.parameters():
+                param.requires_grad = False
+        self.bert_layer_weights = gl.SoftmaxMixLayers(in_features=self.bert_layer_count, out_features=1, bias=False)
+        self.criterion = nn.TripletMarginLoss(margin=1, p=2, reduction='sum')
+
+    def caching_score(self, query_encode_ret_dict, cand_encode_ret_dicts):
+        """
+        Called externally from a class using the trained model.
+        - Create as many repetitions of query_reps as cand_reps.
+        - Compute scores and return.
+        query_encode_ret_dict: {'sent_reps': numpy.array, 'doc_cls_reps': numpy.array}
+        cand_encode_ret_dict: list({'sent_reps': numpy.array, 'doc_cls_reps': numpy.array})
+        """
+        # Pack representations as padded gpu tensors.
+        query_cls_rep = query_encode_ret_dict['doc_cls_reps']
+        cand_cls_reps = [d['doc_cls_reps'] for d in cand_encode_ret_dicts]
+        query_cls_reps = []
+        for bi in range(len(cand_cls_reps)):
+            query_cls_reps.append(query_cls_rep)
+        query_cls_reps, cand_cls_reps = Variable(torch.FloatTensor(np.vstack(query_cls_reps))), \
+            Variable(torch.FloatTensor(np.vstack(cand_cls_reps)))
+        if torch.cuda.is_available():
+            query_cls_reps = query_cls_reps.cuda()
+            cand_cls_reps = cand_cls_reps.cuda()
+        # Compute scores as at train time.
+        doc_sims = -1 * functional.pairwise_distance(query_cls_reps, cand_cls_reps, p=2.0)
+        doc_sims = doc_sims.squeeze()
+        # Make numpy arrays and return.
+        if torch.cuda.is_available():
+            batch_scores = doc_sims.cpu().data.numpy()
+        else:
+            batch_scores = doc_sims.data.numpy()
+        # Return the same thing as batch_scores and pair_scores because the pp_gen_nearest class expects it.
+        ret_dict = {
+            'batch_scores': batch_scores,
+            'pair_scores': batch_scores
+        }
+        return ret_dict
+
 
 class DecoderOnlyAspire(nn.Module):
     def __init__(self, model_hparams=None):
@@ -65,7 +134,6 @@ class DecoderOnlyAspire(nn.Module):
         self.dist_function = get_dist_function(self.score_agg_type, model_hparams)
         weighted_sup = model_hparams.get('weighted_sup', False)
         self.sentsup_dist_function = pair_dist.allpair_masked_dist_l2sup_weighted if weighted_sup else pair_dist.allpair_masked_dist_l2sup
-
 
         self.criterion_sent = CustomTripletMarginWithDistanceLoss(distance_function=self.dist_function,
                                                                   margin=1.0,
@@ -164,25 +232,25 @@ class DecoderOnlyAspire(nn.Module):
         :return: loss_val; torch Variable.
         """
         # Unpack batch_rank
-        query_batch, query_abs_lens = batch_rank['query_batch'], batch_rank['query_abs_lens']
-        pos_batch, pos_abs_lens = batch_rank['pos_batch'], batch_rank['pos_abs_lens']
+        query_batch, query_abs_lens = batch_rank['query_bert_batch'], batch_rank['query_abs_lens']
+        pos_batch, pos_abs_lens = batch_rank['pos_bert_batch'], batch_rank['pos_abs_lens']
         query_senttoki, pos_senttoki = batch_rank['query_senttok_idxs'], batch_rank['pos_senttok_idxs']
         pos_align_idxs = batch_rank['pos_align_idxs']
 
         # Get query paper rep and sentences reps from the model
-        query_rep, query_sent_reps = self.partial_forward(batch=query_batch,
+        query_rep, query_sent_reps = self.partial_forward(bert_batch=query_batch,
                                                         abs_lens=query_abs_lens,
                                                         sent_tok_idxs = query_senttoki)
         # Get positive paper rep and sentences reps from the model
 
-        pos_rep, pos_sent_reps = self.partial_forward(batch=pos_batch,
+        pos_rep, pos_sent_reps = self.partial_forward(bert_batch=pos_batch,
                                                           abs_lens=pos_abs_lens,
                                                           sent_tok_idxs=pos_senttoki)
         # Happens when running on the dev set.
-        if 'neg_batch' in batch_rank:
-            neg_batch, neg_abs_len = batch_rank['neg_batch'], batch_rank['neg_abs_lens']
+        if 'neg_bert_batch' in batch_rank:
+            neg_batch, neg_abs_len = batch_rank['neg_bert_batch'], batch_rank['neg_abs_lens']
             neg_senttoki = batch_rank['neg_senttok_idxs']
-            neg_reps, neg_sent_reps = self.partial_forward(batch=neg_batch, abs_lens=neg_abs_len,
+            neg_reps, neg_sent_reps = self.partial_forward(bert_batch=neg_batch, abs_lens=neg_abs_len,
                                                              sent_tok_idxs=neg_senttoki)
             query_sents = rep_len_tup(embed=query_sent_reps, abs_lens=query_abs_lens)
             pos_sents = rep_len_tup(embed=pos_sent_reps, abs_lens=pos_abs_lens)
@@ -228,7 +296,7 @@ class DecoderOnlyAspire(nn.Module):
             return loss_val
 
 
-    def partial_forward(self, batch, abs_lens, sent_tok_idxs):
+    def partial_forward(self, bert_batch, abs_lens, sent_tok_idxs):
         """
         Pass a batch of sentences through BERT and read off sentence
         representations based on SEP idxs.
@@ -236,8 +304,9 @@ class DecoderOnlyAspire(nn.Module):
             sent_reps: batch_size x encoding_dim x num_sents
         """
         # batch_size x num_sents x encoding_dim
-        doc_reps, sent_reps = self.get_doc_and_sent_reps(batch=batch, num_sents=abs_lens,
-                                                      batch_senttok_idxs=sent_tok_idxs)
+        doc_reps, sent_reps = self.get_doc_and_sent_reps(bert_batch=bert_batch,
+                                                         num_sents=abs_lens,
+                                                         batch_senttok_idxs=sent_tok_idxs)
         if len(sent_reps.size()) == 2:
             sent_reps = sent_reps.unsqueeze(0)
         if len(doc_reps.size()) == 1:
@@ -245,10 +314,11 @@ class DecoderOnlyAspire(nn.Module):
         # Similarity function expects: batch_size x encoding_dim x q_max_sents;
         return doc_reps, sent_reps.permute(0, 2, 1)
 
-    def get_doc_and_sent_reps(self, batch, batch_senttok_idxs, num_sents):
+    def get_doc_and_sent_reps(self, batch, num_sents, batch_senttok_idxs):
         """
         Pass the concated abstract through BERT, and average token reps to get sentence reps.
         -- NO weighted combine across layers.
+        :param batch:
         :param bert_batch: dict('tokid_tt', 'seg_tt', 'attnmask_tt', 'seq_lens'); items to use for getting BERT
             representations. The sentence mapped to BERT vocab and appropriately padded.
         :param batch_senttok_idxs: list(list(list(int))); batch_size([num_sents_per_abs[num_tokens_in_sent]])
@@ -259,7 +329,8 @@ class DecoderOnlyAspire(nn.Module):
         """
         seq_lens, max_sents = batch['seq_lens'], max(num_sents)
         batch_size, max_seq_len = len(seq_lens), max(seq_lens)
-        tokid_tt, attnmask_tt = batch['tokid_tt'].to(self.device), batch['attnmask_tt'].to(self.device)  # Pass input through MISTRAL and return all layer hidden outputs.
+        # Pass input through Qwen2 and return all layer hidden outputs.
+        tokid_tt, attnmask_tt = batch['tokid_tt'].to(self.device), batch['attnmask_tt'].to(self.device)
         model_outputs = self.encoder(tokid_tt, attention_mask=attnmask_tt)
         final_hidden_state = model_outputs.last_hidden_state
         doc_reps = self.last_token_pool(final_hidden_state, attention_mask=attnmask_tt).squeeze()
@@ -299,10 +370,10 @@ class DecoderOnlyAspire(nn.Module):
             negative examples.
         :return: ret_dict
         """
-        doc_batch, doc_abs_lens = batch_dict['batch'], batch_dict['abs_lens']
+        doc_batch, doc_abs_lens = batch_dict['bert_batch'], batch_dict['abs_lens']
         doc_query_senttoki = batch_dict['senttok_idxs']
         # Get the representations from the model; batch_size x encoding_dim x max_sents
-        doc_reps, sent_reps = self.partial_forward(batch=doc_batch,
+        doc_reps, sent_reps = self.partial_forward(bert_batch=doc_batch,
                                                     abs_lens=doc_abs_lens,
                                                    sent_tok_idxs=doc_query_senttoki)
         # Make numpy arrays and return.
@@ -328,7 +399,7 @@ class DecoderOnlyAspire(nn.Module):
             negative examples.
         :return: ret_dict
         """
-        doc_batch, doc_abs_lens = batch_dict['batch'], batch_dict['abs_lens']
+        doc_batch, doc_abs_lens = batch_dict['bert_batch'], batch_dict['abs_lens']
         doc_query_senttoki = batch_dict['senttok_idxs']
         # Get the representations from the model; batch_size x encoding_dim x max_sents
         doc_reps, sent_reps = self.partial_forward(batch=doc_batch, abs_lens=doc_abs_lens,
@@ -336,9 +407,9 @@ class DecoderOnlyAspire(nn.Module):
         # Make numpy arrays and return.
         if torch.cuda.is_available():
             # sent_reps = sent_reps.cpu().data.numpy()
-            sent_reps = sent_reps.float().cpu().data.numpy()
+            sent_reps = sent_reps.float().cpu().data.numpy() # when bfloat16 used its needed
             # doc_reps = doc_reps.cpu().data.numpy()
-            doc_reps = doc_reps.float().cpu().numpy()
+            doc_reps = doc_reps.float().cpu().numpy() # when bfloat16 used its needed
         else:
             sent_reps = sent_reps.data.numpy()
             doc_reps = doc_reps.data.numpy()
@@ -348,7 +419,7 @@ class DecoderOnlyAspire(nn.Module):
             # encoding_dim x num_sents
             upsr = sent_reps[i, :, :num_sents]
             # return: # num_sents x encoding_dim
-            batch_reps.append({'doc_reps': doc_reps[i, :],
+            batch_reps.append({'doc_cls_reps': doc_reps[i, :], # its EOS actually but for consistency
                                'sent_reps': upsr.transpose(1, 0)})
         return batch_reps
 
@@ -363,8 +434,8 @@ class DecoderOnlyAspire(nn.Module):
         cand_encode_ret_dict: list({'sent_reps': numpy.array, 'doc_cls_reps': numpy.array})
         """
         # Pack representations as padded gpu tensors.
-        query_rep, query_sent_reps = query_encode_ret_dict['doc_reps'], query_encode_ret_dict['sent_reps']
-        cand_reps = [d['doc_reps'] for d in cand_encode_ret_dicts]
+        query_rep, query_sent_reps = query_encode_ret_dict['doc_cls_reps'], query_encode_ret_dict['sent_reps']
+        cand_reps = [d['doc_cls_reps'] for d in cand_encode_ret_dicts]
         cand_sent_reps = [d['sent_reps'] for d in cand_encode_ret_dicts]
         batch_size = len(cand_sent_reps)
         cand_lens = [r.shape[0] for r in cand_sent_reps]
@@ -394,11 +465,10 @@ class DecoderOnlyAspire(nn.Module):
         ct = rep_len_tup(embed=padded_cand_sent_reps.permute(0, 2, 1).float(), abs_lens=cand_lens)
 
         # batch_sent_sims, pair_sims = self.dist_function(query=qt, cand=ct, return_pair_sims=True)
-        batch_sent_sims, pair_sims = self.dist_function(
-            query=qt,  # Convert query_reps to float32
-            cand=ct,  # Convert cand_reps to float32
-            return_pair_sims=True
-        )
+        batch_sent_sims, pair_sims = self.dist_function(query=qt,
+                                                        cand=ct,
+                                                        return_pair_sims=True
+                                                        )
         # In the case of WordSentAbsSupAlignBiEnc which also uses this function if sent_loss_prop is zero
         # use the supervised sent prop instead.
         try:
