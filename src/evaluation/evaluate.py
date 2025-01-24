@@ -40,6 +40,7 @@ def score(model: SimilarityModel,
           query_instruct: bool = False):
     """
     Calculate similarity scores between queries and their candidates in a test pool
+    :param query_instruct:
     :param model: Model to test
     :param dataset: Dataset to take test pool from
     :param facet: Facet of query to use. Relevant only to CSFcube dataset.
@@ -285,10 +286,14 @@ if __name__ == '__main__':
 
     '''
     python3 -m src.evaluation.evaluate
-     --model_name=gte-qwen2-1.5B-instruct 
+     --model_name=supsimcse
      --dataset_name=relish 
      --dataset_dir=/cs/labs/tomhope/idopinto12/aspire/datasets/eval/Relish
      --results_dir=/cs/labs/tomhope/idopinto12/aspire_new/results/
      --cache
      --run_name=14-01
+    '''
+    '''
+    python3 -m src.evaluation.evaluate --model_name=supsimcse --dataset_name=treccovid --dataset_dir=/cs/labs/tomhope/idopinto12/aspire_new/datasets/eval/Relish --results_dir=/cs/labs/tomhope/idopinto12/aspire_new/results --cache --run_name 23-01-25
+    
     '''

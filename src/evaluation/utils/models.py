@@ -23,8 +23,6 @@ from typing import List, Dict, Union
 from src.evaluation.utils.datasets import EvalDataset
 from examples import ex_aspire_consent_multimatch
 from examples import ex_aspire_consent
-# from examples.ex_aspire_consent_multimatch import AspireConSent, AllPairMaskedWasserstein
-# from examples.ex_aspire_consent import AspireConSent, prepare_abstracts
 
 class SimilarityModel(metaclass=ABCMeta):
     """
@@ -53,7 +51,7 @@ class SimilarityModel(metaclass=ABCMeta):
     def encode(self, batch_papers: List[Dict],  query_instruct: bool=False):
         """
         Create encodings for a batch of papers
-        :param task_description:
+        :param query_instruct:
         :param batch_papers: List of dictionaries, each representing one paper.
         Keys are 'ABSTRACT', 'TITLE, 'FACETS'.
         If NER extraction ran for the dataset, 'ENTITIES' will exist.
@@ -282,6 +280,8 @@ class BertMLM(SimilarityModel):
     """
     MODEL_PATHS = {
             'specter': 'allenai/specter',
+            'pubmed_ncl': "malteos/PubMedNCL",
+            "scincl": "malteos/scincl",
             # Using roberta here causes the tokenizers below to break cause roberta inputs != bert inputs.
             'supsimcse': 'princeton-nlp/sup-simcse-bert-base-uncased',
             'unsupsimcse': 'princeton-nlp/unsup-simcse-bert-base-uncased'
@@ -373,13 +373,14 @@ class SimCSE(BertMLM):
         :return:
         """
         # pre-process batch
-        batch = []
-        cur_index = 0
-        abs_splits = []
-        for paper in batch_papers:
-            batch += paper['ABSTRACT']
-            cur_index += len(paper['ABSTRACT'])
-            abs_splits.append(cur_index)
+        batch = self._pre_process_input_batch(batch_papers)
+        # batch = []
+        # cur_index = 0
+        # abs_splits = []
+        # for paper in batch_papers:
+        #     batch += paper['ABSTRACT']
+        #     cur_index += len(paper['ABSTRACT'])
+        #     abs_splits.append(cur_index)
         tokid_tt, seg_tt, attnmask_tt, seq_lens_tt = self._prepare_batch(batch)
         if torch.cuda.is_available():
             tokid_tt = tokid_tt.cuda()
@@ -391,14 +392,26 @@ class SimCSE(BertMLM):
         with torch.no_grad():
             model_out = self.model(tokid_tt, token_type_ids=seg_tt, attention_mask=attnmask_tt)
             # top_l is [bs x max_seq_len x bert_encoding_dim]
+            # top_l = model_out.last_hidden_state
             batch_reps_pooler = model_out.pooler_output
             # batch_reps_cls = top_l[:, 0, :]
         if torch.cuda.is_available():
             batch_reps_pooler = batch_reps_pooler.cpu().data.numpy()
             # batch_reps_cls = batch_reps_cls.cpu().data.numpy()
         # return batch_reps_cls
-        batch_reps = np.split(batch_reps_pooler, abs_splits[:-1])
-        return batch_reps
+        # batch_reps = np.split(batch_reps_pooler, abs_splits[:-1])
+        return batch_reps_pooler
+
+    # with torch.no_grad():
+    #     model_out = self.model(tokid_tt, token_type_ids=seg_tt, attention_mask=attnmask_tt)
+    #     # top_l is [bs x max_seq_len x bert_encoding_dim]
+    #     top_l = model_out.last_hidden_state
+    #     batch_reps_pooler = model_out.pooler_output
+    #     batch_reps_cls = top_l[:, 0, :]
+    # if torch.cuda.is_available():
+    #     batch_reps_pooler = batch_reps_pooler.cpu().data.numpy()
+    #     batch_reps_cls = batch_reps_cls.cpu().data.numpy()
+    # return batch_reps_cls, batch_reps_pooler
 
 class BertNER(BertMLM):
     """
@@ -438,7 +451,8 @@ class SentenceModel(SimilarityModel):
     }
     def __init__(self, **kwargs):
         super(SentenceModel, self).__init__(**kwargs)
-        self.model = SentenceTransformer(SentenceModel.MODEL_PATHS[self.name], device='cpu')
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.model = SentenceTransformer(SentenceModel.MODEL_PATHS[self.name], device=self.device.type)
 
     def encode(self, batch_papers: List[Dict], query_instruct=False):
 
@@ -450,7 +464,7 @@ class SentenceModel(SimilarityModel):
             batch += paper['ABSTRACT']
             cur_index += len(paper['ABSTRACT'])
             abs_splits.append(cur_index)
-        sent_reps = self.model.encode(batch, show_progress_bar=False)
+        sent_reps = self.model.encode(batch, show_progress_bar=True)
 
         # re-split sentence embeddings to match lengths of each abstract in batch
         batch_reps = np.split(sent_reps, abs_splits[:-1])
@@ -1001,7 +1015,7 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     """
     if model_name in {'aspire_compsci_ot', 'aspire_biomed_ot','aspire_compsci_ts', 'aspire_biomed_ts'}:
         return AspireModel(name=model_name, encoding_type='sentence')
-    elif model_name == 'specter':
+    elif model_name in {'specter',"pubmed_ncl",'scincl'}:
         return BertMLM(name=model_name, encoding_type='abstract')
     elif model_name in {'supsimcse', 'unsupsimcse'}:
         return SimCSE(name=model_name, encoding_type='abstract')
@@ -1014,18 +1028,14 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     elif model_name in {'aspire_context_ner_compsci_ot', 'aspire_context_ner_biomed_ot','aspire_context_ner_compsci_ts', 'aspire_context_ner_biomed_ts'}:
         return AspireContextNER(name=model_name, encoding_type='sentence-entity')
     elif model_name in {'cospecter_biomed_spec','cospecter_biomed_scib'}:
-        return TrainedAbstractModel(name=model_name,
-                                    trained_model_path=trained_model_path,
-                                    encoding_type='abstract')
+        return TrainedAbstractModel(name=model_name, trained_model_path=trained_model_path)
     elif model_name in {'cosentbert', 'ictsentbert'}:
-        return TrainedSentModel(name=model_name,
-                                trained_model_path=trained_model_path,
-                                encoding_type='sentence')
+        return TrainedSentModel(name=model_name, trained_model_path=trained_model_path, encoding_type='sentence')
     elif model_name in {'gte_qwen2_1.5B_instruct'}:
         return InstructSimilarityModel(name=model_name,encoding_type='abstract')
     # elif model_name in {'gte-qwen2-1.5B-instruct-biomed-co-cite'}:
     #     return TrainedInstructAbstractModel(name=model_name,trained_model_path=trained_model_path,encoding_type='abstract')
     elif model_name in {'aspire_gte_qwen2_1.5B_instruct_biomed_ts'}:
-        return TrainedTSAspireModel(name=model_name, trained_model_path=trained_model_path, model_version='cur_best', encoding_type='sentence')
+        return TrainedTSAspireModel(name=model_name, trained_model_path=trained_model_path, model_version='cur_best')
     else:
         raise NotImplementedError(f"No Implementation for model {model_name}")

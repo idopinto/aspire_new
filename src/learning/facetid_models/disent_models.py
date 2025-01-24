@@ -314,7 +314,7 @@ class DecoderOnlyAspire(nn.Module):
         # Similarity function expects: batch_size x encoding_dim x q_max_sents;
         return doc_reps, sent_reps.permute(0, 2, 1)
 
-    def get_doc_and_sent_reps(self, batch, num_sents, batch_senttok_idxs):
+    def get_doc_and_sent_reps(self, bert_batch, num_sents, batch_senttok_idxs):
         """
         Pass the concated abstract through BERT, and average token reps to get sentence reps.
         -- NO weighted combine across layers.
@@ -327,10 +327,10 @@ class DecoderOnlyAspire(nn.Module):
             doc_cls_reps: FloatTensor [batch_size x bert_encoding_dim]
             sent_reps: FloatTensor [batch_size x num_sents x bert_encoding_dim]
         """
-        seq_lens, max_sents = batch['seq_lens'], max(num_sents)
+        seq_lens, max_sents = bert_batch['seq_lens'], max(num_sents)
         batch_size, max_seq_len = len(seq_lens), max(seq_lens)
         # Pass input through Qwen2 and return all layer hidden outputs.
-        tokid_tt, attnmask_tt = batch['tokid_tt'].to(self.device), batch['attnmask_tt'].to(self.device)
+        tokid_tt, attnmask_tt = bert_batch['tokid_tt'].to(self.device), bert_batch['attnmask_tt'].to(self.device)
         model_outputs = self.encoder(tokid_tt, attention_mask=attnmask_tt)
         final_hidden_state = model_outputs.last_hidden_state
         doc_reps = self.last_token_pool(final_hidden_state, attention_mask=attnmask_tt).squeeze()
@@ -348,7 +348,8 @@ class DecoderOnlyAspire(nn.Module):
                 except IndexError:  # This happens in the case where the abstract has fewer than max sents.
                     sent_i_tok_idxs = []
                 cur_sent_mask[batch_abs_i, sent_i_tok_idxs, :] = 1.0
-            sent_mask = Variable(torch.FloatTensor(cur_sent_mask)).to(self.device) # TODO change from Variable
+            # sent_mask = Variable(torch.FloatTensor(cur_sent_mask)).to(self.device) # TODO change from Variable
+            sent_mask = torch.FloatTensor(cur_sent_mask).to(self.device)
             # batch_size x seq_len x encoding_dim
             sent_tokens = final_hidden_state * sent_mask
             # The sent_masks non zero elements in one slice along embedding dim is the sentence length.
