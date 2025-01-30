@@ -1,0 +1,57 @@
+Wrote: /cs/labs/tomhope/idopinto12/aspire/datasets/train/cocitpids2contexts-biomed-sentfilt.json
+Papers co-cited together:
+                   0
+count  74290.000000
+mean       2.142805
+std        0.436585
+min        2.000000
+25%        2.000000
+50%        2.000000
+75%        2.000000
+max       12.000000
+{2: 65526, 3: 7379, 4: 1066, 5: 229, 6: 59, 7: 20, 8: 6, 9: 3, 10: 1, 12: 1}
+Papers co-cited frequency:
+                   0
+count  74290.000000
+mean       2.250182
+std        0.785595
+min        2.000000
+25%        2.000000
+50%        2.000000
+75%        2.000000
+max       68.000000
+{2: 61986,
+ 3: 8858,
+ 4: 2141,
+ 5: 713,
+ 6: 275,
+ 7: 149,
+ 8: 69,
+ 9: 35,
+ 10: 17,
+ 11: 10,
+ 12: 8,
+ 13: 8,
+ 14: 2,
+ 15: 3,
+ 16: 3,
+ 17: 2,
+ 18: 2,
+ 19: 1,
+ 20: 1,
+ 21: 1,
+ 24: 1,
+ 25: 1,
+ 26: 1,
+ 28: 1,
+ 29: 1,
+ 68: 1}
+Copies of co-citation context: 24206
+Approximate number of possible triple examples: 127418.0
+
+
+cocited pid sets; train: 59432; dev: 14858
+Wrote: /cs/labs/tomhope/idopinto12/aspire/datasets/train/train-coppsent.jsonl
+Number of examples: 103077
+Wrote: /cs/labs/tomhope/idopinto12/aspire/datasets/train/dev-coppsent.jsonl
+Number of examples: 24341

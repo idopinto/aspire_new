@@ -18,7 +18,7 @@ from pathlib import Path
 
 def load_entity_model(entity_model_name: str="en_ner_bc5cdr_md", entity_linker: bool=False, abbreviations_detector: bool=True):
     """
-    :param entity_model_dir: path to dir where PURE's entity berty mode was downloaded.
+    :param entity_model_name: path to dir where 's entity berty mode was downloaded.
     e.g. /aspire/PURE/scierc_models/ent-scib-ctx0
     :return: loaded entity model
     """
@@ -78,6 +78,7 @@ def load_dataset(fname: str):
 
 def main(dataset_dir, dataset_name, output_dir):
     """
+    :param output_dir: Where to save the NER output file
     :param dataset_dir: Data path where biomedical evaluation datasets are located.
     :param dataset_name: name of dataset (relish or treccovid)
     :return:
@@ -96,7 +97,7 @@ def main(dataset_dir, dataset_name, output_dir):
         entities[doc_id] = doc_entities
 
     # save results
-    output_filename = os.path.join(output_dir, f'{dataset_name}-ner.jsonl')
+    output_filename = os.path.join(output_dir, f'{dataset_name}-ner-test.jsonl')
     print(f"Writing output to: {output_filename}")
     with codecs.open(output_filename, 'w', 'utf-8') as fp:
         json.dump(entities, fp)

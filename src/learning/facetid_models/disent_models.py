@@ -101,6 +101,123 @@ class MySPECTER(nn.Module):
         }
         return ret_dict
 
+    def caching_encode(self, batch_dict):
+        """
+        Function used at test time.
+        batch_dict: dict of the form accepted by forward_rank but without any of the
+            negative examples.
+        :return: ret_dict
+        """
+        doc_bert_batch, batch_size = batch_dict['bert_batch'], len(batch_dict['bert_batch']['seq_lens'])
+        # Get the representations from the model; batch_size x encoding_dim x max_sents
+        doc_cls_reps = self.partial_forward(bert_batch=doc_bert_batch)
+        # Make numpy arrays and return.
+        if torch.cuda.is_available():
+            doc_cls_reps = doc_cls_reps.cpu().data.numpy()
+        else:
+            doc_cls_reps = doc_cls_reps.data.numpy()
+        # Return a list of reps instead of reps collated as one np array.
+        batch_reps = []
+        for i in range(batch_size):
+            batch_reps.append({'doc_cls_reps': doc_cls_reps[i, :]})
+        return batch_reps
+
+    def encode(self, batch_dict):
+        """
+        Function used at test time.
+        batch_dict: dict of the form accepted by forward_rank but without any of the
+            negative examples.
+        :return: ret_dict
+        """
+        doc_bert_batch = batch_dict['bert_batch']
+        # Get the representations from the model.
+        doc_reps = self.partial_forward(bert_batch=doc_bert_batch)
+        # Make numpy arrays and return.
+        if torch.cuda.is_available():
+            doc_reps = doc_reps.cpu().data.numpy()
+        else:
+            doc_reps = doc_reps.data.numpy()
+        ret_dict = {
+            'doc_cls_reps': doc_reps,  # batch_size x encoding_dim
+        }
+        return ret_dict
+
+    def forward(self, batch_dict):
+        batch_loss = self.forward_rank(batch_dict['batch_rank'])
+        loss_dict = {
+            'rankl': batch_loss
+        }
+        return loss_dict
+
+    def forward_rank(self, batch_rank):
+        """
+        Function used at training time.
+        batch_dict: dict of the form:
+            {
+                'query_bert_batch': dict(); The batch which BERT inputs with flattened and
+                    concated sentences from query abstracts; Tokenized and int mapped
+                    sentences and other inputs to BERT.
+                'pos_bert_batch': dict(); The batch which BERT inputs with flattened and
+                    concated sentences from positive abstracts; Tokenized and int mapped
+                    sentences and other inputs to BERT.
+                'neg_bert_batch': dict(); The batch which BERT inputs with flattened and
+                    concated sentences from query abstracts; Tokenized and int mapped
+                    sentences and other inputs to BERT.
+            }
+        :return: loss_val; torch Variable.
+        """
+        qbert_batch = batch_rank['query_bert_batch']
+        pbert_batch = batch_rank['pos_bert_batch']
+        # Get the representations from the model.
+        q_sent_reps = self.partial_forward(bert_batch=qbert_batch)
+        p_context_reps = self.partial_forward(bert_batch=pbert_batch)
+        # Happens when running on the dev set.
+        if 'neg_bert_batch' in batch_rank:
+            nbert_batch = batch_rank['neg_bert_batch']
+            n_context_reps = self.partial_forward(bert_batch=nbert_batch)
+        else:
+            # Use a shuffled set of positives as the negatives. -- in-batch negatives.
+            n_context_reps = p_context_reps[torch.randperm(p_context_reps.size()[0])]
+        loss_val = self.criterion(q_sent_reps, p_context_reps, n_context_reps)
+        return loss_val
+
+    def partial_forward(self, bert_batch):
+        """
+        Function shared between the training and test time behaviour. Pass a batch
+        of sentences through BERT and return cls representations.
+        :return:
+            cls_doc_reps: batch_size x encoding_dim
+        """
+        # batch_size x bert_encoding_dim
+        cls_doc_reps = self.doc_reps_bert(bert_batch=bert_batch)
+        if len(cls_doc_reps.size()) == 1:
+            cls_doc_reps = cls_doc_reps.unsqueeze(0)
+        return cls_doc_reps
+
+    def doc_reps_bert(self, bert_batch):
+        """
+        Pass the concated abstract through BERT, and read off [SEP] token reps to get sentence reps,
+        and weighted combine across layers.
+        :param bert_batch: dict('tokid_tt', 'seg_tt', 'attnmask_tt', 'seq_lens'); items to use for getting BERT
+            representations. The sentence mapped to BERT vocab and appropriately padded.
+        :return:
+            doc_cls_reps: FloatTensor [batch_size x bert_encoding_dim]
+        """
+        tokid_tt, seg_tt, attnmask_tt = bert_batch['tokid_tt'], bert_batch['seg_tt'], bert_batch['attnmask_tt']
+        if torch.cuda.is_available():
+            tokid_tt, seg_tt, attnmask_tt = tokid_tt.cuda(), seg_tt.cuda(), attnmask_tt.cuda()
+        # Pass input through BERT and return all layer hidden outputs.
+        model_outputs = self.bert_encoder(tokid_tt, token_type_ids=seg_tt, attention_mask=attnmask_tt)
+        # Weighted combine the hidden_states which is a list of [bs x max_seq_len x bert_encoding_dim]
+        # with as many tensors as layers + 1 input layer.
+        hs_stacked = torch.stack(model_outputs.hidden_states, dim=3)
+        weighted_sum_hs = self.bert_layer_weights(hs_stacked)  # [bs x max_seq_len x bert_encoding_dim x 1]
+        weighted_sum_hs = torch.squeeze(weighted_sum_hs, dim=3)
+        # Read of CLS token as document representation: (batch_size, sequence_length, hidden_size)
+        cls_doc_reps = weighted_sum_hs[:, 0, :]
+        cls_doc_reps = cls_doc_reps.squeeze()
+        return cls_doc_reps
+
 
 class DecoderOnlyAspire(nn.Module):
     def __init__(self, model_hparams=None):
@@ -403,7 +520,7 @@ class DecoderOnlyAspire(nn.Module):
         doc_batch, doc_abs_lens = batch_dict['bert_batch'], batch_dict['abs_lens']
         doc_query_senttoki = batch_dict['senttok_idxs']
         # Get the representations from the model; batch_size x encoding_dim x max_sents
-        doc_reps, sent_reps = self.partial_forward(batch=doc_batch, abs_lens=doc_abs_lens,
+        doc_reps, sent_reps = self.partial_forward(bert_batch=doc_batch, abs_lens=doc_abs_lens,
                                                        sent_tok_idxs=doc_query_senttoki)
         # Make numpy arrays and return.
         if torch.cuda.is_available():

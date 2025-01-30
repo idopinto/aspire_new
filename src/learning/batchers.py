@@ -654,7 +654,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
             batch_seg_ids.append([0] * len(abs_indexed_tokens))
             batch_attn_mask.append([1] * len(abs_indexed_tokens))
 
-        for abs_i, (ids_sent, attn_mask, seg_ids, sent_token_indices) in enumerate(zip(tokenized_batch, batch_seg_ids, batch_attn_mask, batch_sent_token_idxs)):
+        for abs_i, (ids_sent, seg_ids, attn_mask, sent_token_indices) in enumerate(zip(tokenized_batch, batch_seg_ids, batch_attn_mask, batch_sent_token_idxs)):
             pad_len = max_seq_len - len(ids_sent)
             if bert_like:
                 # assuming right padding with BERT-like model
@@ -664,7 +664,7 @@ class AbsSentTokBatcher(SentTripleBatcher):
             else:
                 # Prepend pad_token_id for left padding and no seg_ids is needed - happens with qwen2_1.5B_instruct
                 ids_sent[:0] = [tokenizer.pad_token_id] * pad_len  # Insert padding at the start
-                # seg_ids[:0] = [tokenizer.pad_token_id] * pad_len  # Uncomment if segmentation is required
+                seg_ids[:0] = [tokenizer.pad_token_id] * pad_len  # Uncomment if segmentation is required
                 attn_mask[:0] = [0] * pad_len  # Assuming 0 is the padding mask
 
                 # shift each token index by pad_len - because of the left padding

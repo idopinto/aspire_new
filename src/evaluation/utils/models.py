@@ -258,17 +258,19 @@ class AspireNER(AspireModel):
     def _append_entities(self, batch_papers):
         # append ners to abstract end as new sentences
         input_batch_with_ner = []
-        for sample in batch_papers:
+        for paper in batch_papers:
             ner_list = []
-            if isinstance(sample['ENTITIES'], list):
-                ner_list = [item for sublist in sample['ENTITIES'] for item in sublist]
-            elif isinstance(sample['ENTITIES'], dict):
+            if isinstance(paper['ENTITIES'], list):
+                ner_list = [item for sublist in paper['ENTITIES'] for item in sublist]
+            elif isinstance(paper['ENTITIES'], dict):
                 # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
                 # in this case we don't know in which sentence the entity appeared (could be more than once)
                 # if we want the context of entity, we can get from all occurrences
-                ner_list = list(sample['ENTITIES'].keys())
-            input_sample = {'TITLE': sample['TITLE'],
-                            'ABSTRACT': sample['ABSTRACT'] + ner_list
+                # ner_list = list(sample['ENTITIES'].keys())
+                ner_list  = [f"{entity}:{entity_type}" for entity, entity_type in paper['ENTITIES'].items()]
+
+            input_sample = {'TITLE': paper['TITLE'],
+                            'ABSTRACT': paper['ABSTRACT'] + ner_list
                             } # some entities will be truncated if abstract exceeds total of 500 tokens?
             input_batch_with_ner.append(input_sample)
         return input_batch_with_ner
@@ -294,6 +296,8 @@ class BertMLM(SimilarityModel):
         self.tokenizer = AutoTokenizer.from_pretrained(full_name)
         self.bert_max_seq_len = 500
         self.model = AutoModel.from_pretrained(full_name)
+        print(f"model Loaded.")
+
         self.model.config.output_hidden_states = True
         if torch.cuda.is_available():
             self.model.cuda()
@@ -428,18 +432,20 @@ class BertNER(BertMLM):
         for paper in batch_papers:
             title_abstract = paper['TITLE'] + ' [SEP] ' + ' '.join(paper['ABSTRACT'])
             ner_list = []
-            if isinstance(paper['ABSTRACT'], list):
+            if isinstance(paper['ENTITIES'], list):
                 ner_list = [item for sublist in paper['ENTITIES'] for item in sublist]
-            elif isinstance(paper['ABSTRACT'], dict):
+            elif isinstance(paper['ENTITIES'], dict):
                 # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
                 # in this case we don't know in which sentence the entity appeared (could be more than once)
                 # if we want the context of entity, we can get from all occurrences
-                ner_list = list(paper['ENTITIES'].keys())
+                # ner_list = list(paper['ENTITIES'].keys())
+                ner_list  = [f"{entity}:{entity_type}" for entity, entity_type in paper['ENTITIES'].items()]
             entity_sentences = '. '.join(ner_list)
             title_abstract_entities = title_abstract + ' ' + entity_sentences + '.'
             batch.append(title_abstract_entities)
 
         return batch
+
 class SentenceModel(SimilarityModel):
     """
     Class for SentenceTransformer models.
@@ -476,7 +482,7 @@ class SentenceModel(SimilarityModel):
 
 class InstructSimilarityModel(SimilarityModel):
     """
-    Encodings of abstracts based on Qwen2-1.5B-instruct.
+    Encodings of abstracts based on gte-Qwen2-1.5B-instruct.
     - or any other decoder-only instruction tuned model
     - applying left padding and using EOS (last token) as document embedding.
     - no use of [CLS] or [SEP] tokens at all
@@ -577,6 +583,39 @@ class InstructSimilarityModel(SimilarityModel):
             batch_size = last_hidden_states.shape[0]
             return last_hidden_states[torch.arange(batch_size, device=last_hidden_states.device), sequence_lengths]
 
+class InstructSimilarityModelNER(InstructSimilarityModel):
+    """
+    An implementation of the Specter model
+    where extracted NER entities are added as sentences to the abstract before creating the embedding.
+    """
+    def __init__(self, name, **kwargs):
+        super(InstructSimilarityModelNER, self).__init__(name=name.split('_ner')[0], **kwargs)
+        self.name = name
+
+
+    def _pre_process_input_batch(self, batch_papers: List[Dict], query_instruct: bool=False):
+        batch = []
+        for paper in batch_papers:
+            if query_instruct:
+                task_description = 'Retrieve semantically similar scientific papers.'
+                title_abstract = self._get_detailed_instruct(task_description, paper['TITLE']) + '\n' + ' '.join(paper['ABSTRACT'])
+            else:
+                title_abstract = paper['TITLE'] + '\n' + ' '.join(paper['ABSTRACT'])
+            ner_list = []
+            if isinstance(paper['ENTITIES'], list):
+                ner_list = [item for sublist in paper['ENTITIES'] for item in sublist]
+            elif isinstance(paper['ENTITIES'], dict):
+                # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
+                # in this case we don't know in which sentence the entity appeared (could be more than once)
+                # if we want the context of entity, we can get from all occurrences
+                # ner_list = list(paper['ENTITIES'].keys())
+                ner_list  = [f"{entity}:{entity_type}" for entity, entity_type in paper['ENTITIES'].items()]
+
+            entity_sentences = '. '.join(ner_list)
+            title_abstract_entities = title_abstract + ' ' + entity_sentences + '.'
+            batch.append(title_abstract_entities)
+
+        return batch
 
 # Define the Aspire contextual encoder with embeddings:
 class AspireConSenContextual(nn.Module):
@@ -682,17 +721,11 @@ class TrainedAbstractModel(SimilarityModel):
 
     # model names mapped to their model class
     MODEL_CLASSES = {
-        'cospecter_biomed_spec': disent_models.MySPECTER,
-        'cospecter_biomed_scib': disent_models.MySPECTER,
-        'cospecter_compsci_spec': disent_models.MySPECTER,
+        'cospecter_biomed_spec': (disent_models.MySPECTER,batchers.AbsTripleBatcher),
+        'cospecter_biomed_scib': (disent_models.MySPECTER,batchers.AbsTripleBatcher),
+        'cospecter_compsci_spec': (disent_models.MySPECTER,batchers.AbsTripleBatcher)
 
     }
-    MODEL_BATCHERS = {
-        'cospecter_biomed_spec': batchers.AbsTripleBatcher,
-        'cospecter_biomed_scib': batchers.AbsTripleBatcher,
-        'cospecter_compsci_spec': batchers.AbsTripleBatcher,
-    }
-
     def __init__(self, trained_model_path, model_version='cur_best', **kwargs):
         super(TrainedAbstractModel, self).__init__(encoding_type='abstract', **kwargs)
 
@@ -707,9 +740,10 @@ class TrainedAbstractModel(SimilarityModel):
             hyper_params = run_info['all_hparams']
 
         # get model class and batcher
-        if self.name == 'cospecter':
-            ModelClass = disent_models.MySPECTER
-            batcher = batchers.AbsTripleBatcher
+        if self.name in {'cospecter_biomed_spec', 'cospecter_biomed_scib', 'cospecter_compsci_spec'}:
+            ModelClass, batcher = TrainedAbstractModel.MODEL_CLASSES[self.name]
+            # ModelClass = disent_models.MySPECTER
+            # batcher = batchers.AbsTripleBatcher
         else:
             raise NotImplementedError(f"Unknown model {self.name}")
 
@@ -717,7 +751,7 @@ class TrainedAbstractModel(SimilarityModel):
         model = ModelClass(hyper_params)
 
         # load weights
-        model.load_state_dict(torch.load(weights_filename))
+        model.load_state_dict(torch.load(weights_filename), strict=False)
 
         # Move model to GPU
         if torch.cuda.is_available():
@@ -734,7 +768,7 @@ class TrainedAbstractModel(SimilarityModel):
         # pass through model
         bert_batch, _, _ = self.batcher.prepare_bert_sentences(sents=batch, tokenizer=self.tokenizer, query_instruct=False, bert_like=True)
         ret_dict = self.model.encode(batch_dict={'bert_batch': bert_batch})
-        return ret_dict['doc_reps']
+        return ret_dict['doc_cls_reps']
 
     def get_similarity(self, x, y):
         return -euclidean(x, y)
@@ -893,7 +927,7 @@ class AspireContextNER(SimilarityModel):
         else:
             raise NotImplementedError(f"Unknown model type: {self.model_type}; should be 'ot' or 'ts'")
 
-# class TrainedInstructAbstractModel(SimilarityModel):
+# class QwenAspireCoCite(SimilarityModel):
 #     """
 #     Class for our trained models which provide abstracts embeddings
 #     """
@@ -953,10 +987,13 @@ class TrainedTSAspireModel(SimilarityModel):
     """
     # model names mapped to their model class
     MODEL_CLASSES = {
-        'aspire_gte_Qwen2_1.5B_instruct_biomed_ts': disent_models.DecoderOnlyAspire,
+        'aspire_gte_qwen2_1.5B_instruct_biomed_ts': disent_models.DecoderOnlyAspire,
+        'aspire_gte_ner_qwen2_1.5B_instruct_biomed_ts': disent_models.DecoderOnlyAspire,
     }
     MODEL_BATCHERS = {
-        'aspire_gte_Qwen2_1.5B_instruct_biomed_ts': batchers.AbsSentTokBatcher
+        'aspire_gte_qwen2_1.5B_instruct_biomed_ts': batchers.AbsSentTokBatcher,
+        'aspire_gte_ner_qwen2_1.5B_instruct_biomed_ts': batchers.AbsSentTokBatcher
+
     }
 
     def __init__(self, trained_model_path, model_version='cur_best', **kwargs):
@@ -991,9 +1028,12 @@ class TrainedTSAspireModel(SimilarityModel):
         pair_dists = -1 * torch.cdist(x, y)
         return torch.max(pair_dists).item()
 
-    def encode(self, batch_papers: List[Dict], query_instruct: bool = False):
+    def encode(self, batch_papers: List[Dict], query_instruct: bool = False, bert_like=False):
         # prepare input
-        batch, abs_lens, sent_token_idxs = self.batcher.prepare_abstracts(batch_papers, self.tokenizer, query_instruct=query_instruct, bert_like=False)
+        batch, abs_lens, sent_token_idxs = self.batcher.prepare_abstracts(batch_papers,
+                                                                          self.tokenizer,
+                                                                          query_instruct=query_instruct,
+                                                                          bert_like=bert_like)
         batch_dict = {
             'bert_batch': batch,
             'abs_lens': abs_lens,
@@ -1005,6 +1045,43 @@ class TrainedTSAspireModel(SimilarityModel):
         if query_instruct:
             return torch.Tensor(batch_dict['sent_reps'][0])
         return batch_dict['sent_reps']
+
+class QwenAspireNER(TrainedTSAspireModel):
+    """
+    An implementation of the ot_aspire models,
+    where NER entities which were extracted from the sentences of the abstract are added
+    as new sentences to the abstract.
+    Testing on csfcube suggests improved results when using this form of Input Augmentation.
+    """
+    def __init__(self, **kwargs):
+        super(QwenAspireNER, self).__init__(**kwargs)
+
+    def encode(self, batch_papers: List[Dict], query_instruct=False, bert_like=False):
+        assert 'ENTITIES' in batch_papers[0], 'No NER data for input. Please run NER/extract_entity.py or extract_biomedical_entities.py and' \
+                                             ' place result in {dataset_dir}/{dataset_name}-ner.jsonl'
+        input_batch_with_ner = self._append_entities(batch_papers)
+        return super(QwenAspireNER, self).encode(input_batch_with_ner, query_instruct=query_instruct, bert_like=bert_like)
+
+    def _append_entities(self, batch_papers):
+        # append ners to abstract end as new sentences
+        input_batch_with_ner = []
+        for paper in batch_papers:
+            ner_list = []
+            if isinstance(paper['ENTITIES'], list):
+                ner_list = [item for sublist in paper['ENTITIES'] for item in sublist]
+            elif isinstance(paper['ENTITIES'], dict):
+                # Used in biomedical NER, to reduce amount of duplications. entity types also available as values.
+                # in this case we don't know in which sentence the entity appeared (could be more than once)
+                # if we want the context of entity, we can get from all occurrences
+                # ner_list = list(sample['ENTITIES'].keys())
+                ner_list  = [f"{entity}:{entity_type}" for entity, entity_type in paper['ENTITIES'].items()]
+
+            input_sample = {'TITLE': paper['TITLE'],
+                            'ABSTRACT': paper['ABSTRACT'] + ner_list
+                            } # some entities will be truncated if abstract exceeds total of 500 tokens?
+            input_batch_with_ner.append(input_sample)
+        return input_batch_with_ner
+
 
 def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     """
@@ -1034,8 +1111,12 @@ def get_model(model_name, trained_model_path=None) -> SimilarityModel:
     elif model_name in {'gte_qwen2_1.5B_instruct'}:
         return InstructSimilarityModel(name=model_name,encoding_type='abstract')
     # elif model_name in {'gte-qwen2-1.5B-instruct-biomed-co-cite'}:
-    #     return TrainedInstructAbstractModel(name=model_name,trained_model_path=trained_model_path,encoding_type='abstract')
-    elif model_name in {'aspire_gte_qwen2_1.5B_instruct_biomed_ts'}:
+    #     return QwenAspireCoCite(name=model_name,trained_model_path=trained_model_path,encoding_type='abstract')
+    elif model_name in {  "aspire_gte_qwen2_1.5B_instruct_biomed_ts"}:
         return TrainedTSAspireModel(name=model_name, trained_model_path=trained_model_path, model_version='cur_best')
+    elif model_name in {"gte_qwen2_1.5B_instruct_ner"}:
+        return InstructSimilarityModelNER(name=model_name,encoding_type='abstract')
+    elif model_name in {"aspire_gte_ner_qwen2_1.5B_instruct_biomed_ts"}:
+        return QwenAspireNER(name=model_name, trained_model_path=trained_model_path, model_version='cur_best')
     else:
         raise NotImplementedError(f"No Implementation for model {model_name}")

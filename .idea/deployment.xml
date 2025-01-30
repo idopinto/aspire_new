@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="PublishConfigData" autoUpload="Always" serverName="idopinto12@epona-01.cs.huji.ac.il:22 agent" remoteFilesAllowedToDisappearOnAutoupload="false">
+    <serverData>
+      <paths name="idopinto12@binky-03.cs.huji.ac.il:22 agent (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@binky-04.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@binky-04.cs.huji.ac.il:22 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@binky-05.cs.huji.ac.il:22 agent (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@creek-01.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@cyril-01.cs.huji.ac.il:22 password">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@drape-01.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@epona-01.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@epona-02.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@firefoot-01.cs.huji.ac.il:22 agent (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@firefoot-02.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@firefoot-03.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@firth-01.cs.huji.ac.il:22 agent (2)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@firth-02.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@gringolet-01.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@gringolet-05.cs.huji.ac.il:22 agent">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+      <paths name="idopinto12@phoenix.cs.huji.ac.il:22 agent (3)">
+        <serverdata>
+          <mappings>
+            <mapping deploy="/aspire_new" local="$PROJECT_DIR$" />
+            <mapping local="" />
+          </mappings>
+        </serverdata>
+      </paths>
+    </serverData>
+    <option name="myAutoUpload" value="ALWAYS" />
+  </component>
+</project>
