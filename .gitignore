@@ -2,3 +2,4 @@ PURE/
 /.idea
 /datasets
 /scripts
+cpu_log.py
