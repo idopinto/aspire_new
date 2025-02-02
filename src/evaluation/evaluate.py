@@ -10,8 +10,6 @@ import pandas as pd
 from src.evaluation.utils.metrics import compute_metrics
 import sys
 import logging
-from datetime import datetime
-import torch
 
 def encode(model: SimilarityModel, dataset: EvalDataset):
     """
@@ -77,7 +75,7 @@ def score(model: SimilarityModel,
 
         # For calculate similarities of each candidate to query encoding
         candidate_similarities = dict()
-        for candidate_pid in candidate_pids:
+        for candidate_pid in tqdm(candidate_pids):
             similarity = model.get_similarity(query_encoding, candidate_encodings[candidate_pid])
             candidate_similarities[candidate_pid] = similarity
         # sort candidates by similarity, ascending (lower score == closer encodings)
@@ -106,6 +104,7 @@ def get_query_test_or_dev_split(query_id, data):
         if query_id in set(vals):
             return key
     return None
+
 def evaluate(results_dir: str,
              facet: Union[str, None],
              dataset: EvalDataset,
@@ -208,7 +207,8 @@ def main(args):
         create_dir(results_dir)
 
     # init model and dataset
-    dataset = EvalDataset(name=args.dataset_name, root_path=args.dataset_dir)
+
+    dataset = EvalDataset(name=args.dataset_name, root_path=args.dataset_dir,ner_parquet=args.ner_parquet,include_ner_definitions=args.include_ner_definitions)
     model= None
     if 'encode' in args.actions or 'score' in args.actions:
         logging.info(f'Loading model: {args.model_name}')
@@ -278,6 +278,9 @@ def parse_args():
                         'Evaluate' calculates metrics based on the similarity scores predicted.
                         By default does all three.""")
     parser.add_argument('--query_instruct', action='store_true', help='Use to wrap query with instruction')
+    parser.add_argument('--include_ner_definitions',action='store_true' ,help='Include NER definitions or not')
+    parser.add_argument('--ner_parquet', action='store_true',help='if loading parquet ner file')
+
     return parser.parse_args()
 
 if __name__ == '__main__':

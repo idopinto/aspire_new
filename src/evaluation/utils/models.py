@@ -1,4 +1,6 @@
 from abc import ABCMeta, abstractmethod
+import torch
+from torch import nn, Tensor
 
 from transformers import AutoTokenizer, AutoModel
 
@@ -7,8 +9,6 @@ from src.learning.facetid_models import disent_models
 from src.learning import batchers
 from collections import namedtuple
 from scipy.spatial.distance import euclidean
-import torch
-from torch import nn, Tensor
 from torch.autograd import Variable
 import numpy as np
 import h5py
@@ -238,7 +238,6 @@ class AspireModel(SimilarityModel):
 
         return batch_reps
 
-
 class AspireNER(AspireModel):
     """
     An implementation of the ot_aspire models,
@@ -246,9 +245,8 @@ class AspireNER(AspireModel):
     as new sentences to the abstract.
     Testing on csfcube suggests improved results when using this form of Input Augmentation.
     """
-    def __init__(self, **kwargs):
+    def __init__(self,**kwargs):
         super(AspireNER, self).__init__(**kwargs)
-
     def encode(self, batch_papers: List[Dict], query_instruct=False):
         assert 'ENTITIES' in batch_papers[0], 'No NER data for input. Please run NER/extract_entity.py or extract_biomedical_entities.py and' \
                                              ' place result in {dataset_dir}/{dataset_name}-ner.jsonl'
@@ -1083,9 +1081,10 @@ class QwenAspireNER(TrainedTSAspireModel):
         return input_batch_with_ner
 
 
-def get_model(model_name, trained_model_path=None) -> SimilarityModel:
+def get_model(model_name, trained_model_path=None, include_ner_definitions=False) -> SimilarityModel:
     """
     Factory method for SimilarityModel used in evaluation
+    :param include_ner_definitions:
     :param model_name: name of model to create
     :param trained_model_path: If a trained model, supply path to the training
     :return: SimilarityModel

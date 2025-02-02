@@ -221,7 +221,7 @@ def prepare_bert_sentences(batch_doc_sents, tokenizer):
         batch_tokenized_text: list(string); tokenized concated title and abstract.
         batch_sent_token_idxs: list(list(list(int))); batch_size([num_sents_per_abs[num_tokens_in_sent]])
     """
-    max_num_toks = 500
+    max_num_toks = 500 # TODO needs to increase for ner definitions
     # Construct the batch.
     tokenized_batch = []
     batch_tokenized_text = []

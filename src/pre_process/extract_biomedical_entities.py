@@ -2,7 +2,21 @@
 Extracting Biomedical Entities as pre-processing stage for biomedical evaluation datasets: Relish, TRECCOVID-RF
 Using SciSpacy:
 en_ner_bc5cdr_md: A spaCy NER model trained on the BC5CDR corpus.
+Entity Types: ['DISEASES', 'CHEMICALS']
 https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bc5cdr_md-0.5.4.tar.gz
+
+en_ner_craft_md: A spaCy NER model trained on the CRAFT corpus.
+Entity Types: ['CHEBI', 'CL', 'GGP', 'GO', 'SO', 'TAXON']
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_craft_md-0.5.4.tar.gz
+
+en_ner_jnlpba_md: A spaCy NER model trained on the JNLPBA corpus.
+Entity Types: ['CELL_LINE', 'CELL_TYPE', 'DNA', 'PROTEIN', 'RNA']
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_jnlpba_md-0.5.4.tar.gz
+
+en_ner_bionlp13cg_md: A spaCy NER model trained on the BIONLP13CG corpus.
+Entity Types: ['AMINO_ACID','ANATOMICAL_SYSTEM', 'CANCER','CELL','CELLULAR_COMPONENT,'DEVELOPING_ANATOMICAL_STRUCTURE,'GENE_OR_GENE_PRODUCT'
+                ,'IMMATERIAL_ANATOMICAL_STRUCTURE, 'MULTI_TISSUE_STRUCTURE,'ORGAN','ORGANISM','ORGANISM_SUBDIVISION,'ORGANISM_SUBSTANCE','PATHOLOGICAL_FORMATION','SIMPLE_CHEMICAL','TISSUE']
+https://s3-us-west-2.amazonaws.com/ai2-s2-scispacy/releases/v0.5.4/en_ner_bionlp13cg_md-0.5.4.tar.gz
 """
 import argparse
 from typing import List, Dict
@@ -11,52 +25,105 @@ import spacy
 import codecs
 import json
 import os
+
+from pandas import DataFrame
+from spacy import displacy
+
 from scispacy.abbreviation import AbbreviationDetector
 from scispacy.linking import EntityLinker
-from tqdm import tqdm
 from pathlib import Path
+import pandas as pd
+from tqdm import tqdm
+from transformers import AutoTokenizer
 
-def load_entity_model(entity_model_name: str="en_ner_bc5cdr_md", entity_linker: bool=False, abbreviations_detector: bool=True):
+NER_MODELS =[
+             "en_ner_bc5cdr_md",
+             "en_ner_craft_md",
+             "en_ner_jnlpba_md",
+             "en_ner_bionlp13cg_md",
+             # "en_core_sci_scibert"
+             ]
+
+def get_row(model, document, doc_abbreviation_dict, paper_id, sent_i):
     """
-    :param entity_model_name: path to dir where 's entity berty mode was downloaded.
-    e.g. /aspire/PURE/scierc_models/ent-scib-ctx0
+    Function to return extracted entities along with their UMLS definitions.
+    Args:
+        model: SciSpaCy model with a UMLS linker
+        document: Text to analyze
+        doc_abbreviation_dict: Dictionary to track abbreviations
+        paper_id: Identifier for the paper
+        sent_i: Sentence index
+    Returns:
+        doc: Processed spaCy document
+        row: Set of unique entities with their labels and UMLS definitions
+        doc_abbreviation_dict: Updated abbreviation dictionary
+    """
+    doc = model(document)
+    linker = model.get_pipe("scispacy_linker")
+    model_name = model.meta['name']
+    # Create a dictionary of detected abbreviations
+    doc_abbreviation_dict.update({abrv.text.lower(): abrv._.long_form.text.lower() for abrv in doc._.abbreviations})
+
+    expanded_entities = []
+    for entity in doc.ents:
+        umls_definitions = []
+        # Retrieve UMLS definitions
+        for umls_ent in entity._.kb_ents:
+            cui = umls_ent[0]
+            umls_entity = linker.kb.cui_to_entity[cui]
+            umls_definitions.append((cui, umls_entity.definition))
+        if not umls_definitions:
+            continue
+        if entity.text.lower() in doc_abbreviation_dict:
+            long_form = doc_abbreviation_dict[entity.text.lower()]
+        else:
+            long_form = "-"
+        cui_list = [cui for cui, _ in umls_definitions]
+        definition_list = [definition for _, definition in umls_definitions if definition]
+
+        if definition_list:
+            combined_cui = "; ".join(cui_list)
+            combined_definition = " | ".join(definition_list)  # Separate multiple definitions with "|"
+            expanded_entities.append([entity.text, long_form,entity.label_, combined_cui, combined_definition])
+
+    row = set((paper_id, entity_text,long_form,entity_label, sent_i, model_name, cuds,definitions) for entity_text,long_form, entity_label, cuds, definitions in expanded_entities)
+
+    return doc, row, doc_abbreviation_dict
+
+
+def load_entity_model(entity_model_name: str="en_ner_bc5cdr_md", resolve_abbreviations:bool=False):
+    """
+    :param resolve_abbreviations:
+    :param entity_model_name: name of spaCy or SciSpaCy model
     :return: loaded entity model
     """
     nlp = spacy.load(entity_model_name)
-    if abbreviations_detector:
-        nlp.add_pipe("abbreviation_detector")
-    if not entity_linker:
-        return nlp
-    nlp.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_name": "umls"})
-    linker = nlp.get_pipe("scispacy_linker")
-    return nlp, linker
+    if resolve_abbreviations:
+        nlp.add_pipe("abbreviation_detector", before="ner")  # Ensure it's before NER
+    return nlp
 
 
-def extract_biomed_ners(sentences: List[str], model, resolve_abbrevations=True) -> Dict[str, str]:
+def extract_biomed_ners(paper_id, sentences: List[str], model, entities_df: pd.DataFrame) -> DataFrame:
     """
     Extracts NER entities from sentences using the entity model provided.
+    :param paper_id:
+    :param resolve_abbrevations:
+    :param entities_df:
     :param sentences: List[str]
     :param model: SciSpacy Biomed NER model
     :return: dict of entities and their labels.
     """
-    ents2labels = dict()
+    doc_abbreviation_dict = {}
     for j, sentence in enumerate(sentences):
-        sent = model(sentence)
-        sent_ents = sent.ents
-        for ent in sent_ents:
-            normalized_ent = ent.text.lower()
-            if resolve_abbrevations:
-                sent_abbrevs = sent._.abbreviations
-                for abrev in sent_abbrevs:
-                    if normalized_ent == abrev.text.lower():
-                        normalized_ent = abrev._.long_form.text.lower()
-                        break
-            if normalized_ent in ents2labels.keys():
-                if ent.label_ != ents2labels[normalized_ent]:
-                    ents2labels[normalized_ent] = ent.label_
-            else:
-                ents2labels[normalized_ent] = ent.label_
-    return ents2labels
+        sent, row_to_append, doc_abbreviation_dict = get_row(model, sentence, doc_abbreviation_dict, paper_id, j)
+        if len(row_to_append) > 0:
+            to_append = pd.DataFrame(row_to_append, columns=["paper_id","entity","long_form", "label", "sent_index",'ner_model','cuds','definitions'])
+            entities_df["entity_lower"] = entities_df["entity"].str.lower()
+            entities_df = pd.concat([entities_df, to_append], ignore_index=True).drop_duplicates(
+                subset=["paper_id", "entity_lower"]
+            ).drop(columns=["entity_lower"])
+
+    return entities_df
 
 def load_dataset(fname: str):
     """
@@ -64,8 +131,11 @@ def load_dataset(fname: str):
     :return: dict of {pid: data}
     """
     dataset = dict()
+    # i = 0
     with codecs.open(fname, 'r', 'utf-8') as f:
         for jsonline in tqdm(f):
+            # if i >= 100:
+            #     break
             data = json.loads(jsonline.strip())
             pid = data['paper_id']
             ret_dict = {
@@ -73,6 +143,9 @@ def load_dataset(fname: str):
                 'ABSTRACT': data['abstract'],
             }
             dataset[pid] = ret_dict
+            # i += 1
+
+    print(len(dataset))
     return dataset
 
 
@@ -83,24 +156,22 @@ def main(dataset_dir, dataset_name, output_dir):
     :param dataset_name: name of dataset (relish or treccovid)
     :return:
     """
-
     # load entity model and dataset
-    print("Loading model and dataset")
-    model = load_entity_model()
     dataset = load_dataset(os.path.join(dataset_dir, f'abstracts-{dataset_name}.jsonl'))
+    print(f"{dataset_name} Loaded.")
+    entities_df = pd.DataFrame(columns=["paper_id","entity",'long_form', "label", "sent_index",'ner_model','cuds','definitions'])
+    for model_name in NER_MODELS:
+        model = load_entity_model(entity_model_name=model_name, resolve_abbreviations=True)
+        model.add_pipe("scispacy_linker", config={"resolve_abbreviations": True, "linker_name": "umls"})
+        print(f"{model_name} Loaded.")
+        # find entities for each paper
+        print("Extracting entities from abstracts")
+        for (doc_id, doc) in tqdm(list(dataset.items())):
+            entities_df = extract_biomed_ners(doc_id, doc['ABSTRACT'], model,entities_df)
 
-    # find entities for each paper
-    print("Extracting entities from abstracts")
-    entities = dict()
-    for (doc_id, doc) in tqdm(list(dataset.items())):
-        doc_entities = extract_biomed_ners(doc['ABSTRACT'], model)
-        entities[doc_id] = doc_entities
+    output_filename = os.path.join(output_dir, f'{dataset_name}-ner.csv')
+    entities_df.to_csv(output_filename, index=False)
 
-    # save results
-    output_filename = os.path.join(output_dir, f'{dataset_name}-ner-test.jsonl')
-    print(f"Writing output to: {output_filename}")
-    with codecs.open(output_filename, 'w', 'utf-8') as fp:
-        json.dump(entities, fp)
 
 def parse_args():
     parser = argparse.ArgumentParser()
@@ -109,55 +180,40 @@ def parse_args():
     parser.add_argument('--output_dir', required=True, help='Output directory where extracted entities should be written')
     return parser.parse_args()
 
+def analayze():
+    file_path = "/cs/labs/tomhope/idopinto12/aspire_new/datasets/eval/TRECCOVID-RF/treccovid-ner.csv"
+    df = pd.read_csv(file_path)
+    # Load the SPECTER tokenizer
+    tokenizer = AutoTokenizer.from_pretrained("allenai/specter")
+
+    # Count unique paper_id values
+    unique_paper_ids_count = df["paper_id"].nunique()
+
+    print(unique_paper_ids_count)
+
+    # Calculate the average length of a single definition across all definitions
+    df["definitions"] = df["definitions"].astype(str)
+    all_definitions = df["definitions"].dropna().str.split(r"\s*\|\s*").explode()
+    average_single_definition_length = all_definitions.str.len().mean()
+    token_counts = all_definitions.apply(lambda x: len(tokenizer.tokenize(x)))
+    average_tokens_per_definition = token_counts.mean()
+    print(average_single_definition_length, average_tokens_per_definition)
+
 
 if __name__ == '__main__':
     args = parse_args()
-    main(dataset_dir=args.dataset_dir, dataset_name=args.dataset_name, output_dir=args.output_dir)
-
-''''
+    analayze()
 
 
-papers = [{"title": "MicroRNAs in autoimmune disease.",
-         "abstract": ["MicroRNAs (miRNAs) are non-coding, single-stranded small RNAs, usually 18-25 nucleotides long, have ability to regulate gene expression post-transcriptionally.",
-                      "miRNAs are highly homologous, conserved and are found in various living organisms including plants and animals.",
-                      "Present studies show that these small RNAs anticipate and are directly involved in many important physiological and pathological processes including growth, proliferation, maturation, metabolism, and inflammation among others.",
-                      "Evidences are accumulating that miRNAs play active role in directing immune responses and, therefore, might be involved in pathogenesis of autoimmune diseases.",
-                      "Recent studies have found that miRNAs are critical in proliferation, maturation and differentiation of T cells, B cells and, therefore, may affect the outcome of an immune response.",
-                      "In light of such understanding, this review briefly introduces miRNAs and discusses its role in the pathogenesis of various autoimmune diseases, as well as its potential as a biomarker and therapeutic target in the management of autoimmune diseases."],
-            "paper_id": "26000120"},
-          # {"title": "A Novel Model for Evaluating the Flow of Endodontic Materials Using Micro-computed Tomography.",
-          #  "abstract": ["INTRODUCTION: Flow and filling ability are important properties of endodontic materials.",
-          #               "The aim of this study was to propose a new technique for evaluating flow using micro-computed tomographic (\u03bcCT) imaging.",
-          #               "METHODS: A glass plate was manufactured with a central cavity and 4 grooves extending out horizontally and vertically.",
-          #               "The flow of MTA-Angelus (Angelus, Londrina, PR, Brazil), zinc oxide eugenol (ZOE), and Biodentine (BIO) (Septodont, Saint Maur des Foss\u00e9s, France) was evaluated using International Standards Organization (ISO) 6876/2002 and a new technique as follows: 0.05\u00a0\u00b1\u00a00.005\u00a0mL of each material was placed in the central cavity, and another glass plate and metal weight with a total mass of 120\u00a0g were placed over the material.",
-          #               "The plate/material set was scanned using \u03bcCT imaging.",
-          #               "The flow was calculated by linear measurement (mm) of the material in the grooves.",
-          #               "Central cavity filling was calculated in mm(3) in the central cavity.", "Lateral cavity filling (LCF) was measured by LCF mean values up to 2\u00a0mm from the central cavity.",
-          #               "Data were analyzed statistically using analysis of variance and Tukey tests with a 5% significance level.",
-          #               "RESULTS: ZOE showed the highest flow rate determined by ISO methodology (P\u00a0<\u00a0.05).",
-          #               "Analysis performed using \u03bcCT imaging showed MTA-Angelus and ZOE had higher linear flow rates in the grooves.",
-          #               "Central cavity filling was similar for the materials.", "However, LCF was higher for BIO versus ZOE.",
-          #               "CONCLUSIONS: Although ZOE presented better flow determined by ISO methodology, BIO showed the best filling ability.",
-          #               "The model of the technique proposed for evaluating flow using \u03bcCT imaging showed proper and reproducible results and could improve flow analysis."],
-          #  "paper_id": "28268019"}
-          ]
-          
-          
-          
+    # main(dataset_dir=args.dataset_dir, dataset_name=args.dataset_name, output_dir=args.output_dir)
 
-for i, paper in enumerate(papers):
-    print(f"Paper {i}, title: {paper['title']}")
-    for j, sentence in enumerate(paper['abstract']):
-        doc = nlp(sentence)
-        if len(doc.ents) > 0:
-            print(f"{j}. count: {len(doc.ents)}")
-            for ent in doc.ents:
-                print(f"{ent.text} \t ({ent.start_char}, {ent.end_char}) \t {ent.label_}\n")
-                for umls_ent in ent._.kb_ents:
-                    print(linker.kb.cui_to_entity[umls_ent[0]])
-            print("------------")
-            print("Abbreviation", "\t","Span","\t", "Definition")
-            for abrv in doc._.abbreviations:
-                print(f"{abrv} \t\t ({abrv.start}, {abrv.end}) \t\t {abrv._.long_form}")
-    print("#########################################################################")
-'''
+
+# {'Shape': (89126, 8),
+#  'Columns': ['paper_id',
+#   'entity',
+#   'long_form',
+#   'label',
+#   'sent_index',
+#   'ner_model',
+#   'cuds',
+#   'definitions']}

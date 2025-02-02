@@ -9,16 +9,20 @@ class EvalDataset:
     Class for datasets used in evaluation
     """
 
-    def __init__(self, name: str, root_path: str):
+    def __init__(self, name: str, root_path: str, ner_parquet: bool=False, include_ner_definitions:bool=False):
         """
         :param name: Name of dataset
         :param root_path: Path where dataset files sit (e.g. abstracts-{name}}.json)
+        :param include_ner_definitions: A boolean flag to include entity definitions.
+
         """
         self.name = name
         self.root_path = root_path
         self.dataset = self._load_dataset(fname=os.path.join(root_path, f'abstracts-{self.name}.jsonl'))
         # load entity data, if exists
-        self.ner_data = self._load_ners()
+        self.ner_data =self._load_ners_parquet() if ner_parquet else self._load_ners()
+        self.ner_parquet =ner_parquet
+        self.include_ner_definitions =include_ner_definitions
 
     @staticmethod
     def _load_dataset(fname: str) -> Dict:
@@ -55,6 +59,40 @@ class EvalDataset:
         else:
             return None
 
+    def _load_ners_parquet(self):
+        fname = os.path.join(self.root_path, f"{self.name}-ner.parquet")
+        if os.path.exists(fname):
+            return pd.read_parquet(fname)
+        return None
+
+    def _get_entities_as_dict(self, paper_id):
+        """
+        Extracts entities for a given paper ID from a DataFrame and returns them as a dictionary.
+
+        Args:
+            paper_id: The ID of the paper for which to extract entities.
+
+        Returns:
+            A dictionary with the key "ENTITIES" and a list of entities (with or without definitions).
+            Returns an empty dictionary if the paper_id is not found.
+        """
+        if paper_id not in self.ner_data['paper_id'].values:
+            print(f'Paper ID {paper_id} not found in {self.name} ner data.')
+            return {'ENTITIES': []}
+
+        paper_data = self.ner_data[self.ner_data['paper_id'] == paper_id]
+        entities = []
+        for index, row in paper_data.iterrows():
+            entity = row['long_form'] if row['long_form'] != '-' else row['entity']
+            if self.include_ner_definitions:
+                # takes only the first definition.
+                definition = row['definitions'].split(' | ')[0] if pd.notna(row['definitions']) else ""  # handle NaN
+                entities.append([f'{entity}: {definition}'])
+            else:
+                entities.append(entity)
+
+        return {"ENTITIES": entities}
+
     def get(self, pid: str) -> Dict:
         """
         :param pid: paper id
@@ -62,7 +100,11 @@ class EvalDataset:
         """
         data = self.dataset[pid]
         if self.ner_data is not None:
-            return {**data, **{'ENTITIES': self.ner_data[pid]}}
+            if self.ner_parquet :
+                entities_dict = self._get_entities_as_dict(pid)
+                return {**data, **entities_dict}
+            else:
+                return {**data, **{'ENTITIES': self.ner_data[pid]}}
         else:
             return data
 

@@ -5,7 +5,7 @@
       <sourceFolder url="file://$MODULE_DIR$/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/test_files" isTestSource="true" />
     </content>
-    <orderEntry type="jdk" jdkName="Remote Python 3.12.7 (sftp://idopinto12@epona-01.cs.huji.ac.il:22/cs/labs/tomhope/idopinto12/aspire_new/aspire_env/bin/python)" jdkType="Python SDK" />
+    <orderEntry type="jdk" jdkName="Remote Python 3.12.7 (sftp://idopinto12@epona-02.cs.huji.ac.il:22/cs/labs/tomhope/idopinto12/aspire_new/aspire_env/bin/python)" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>
 </module>
