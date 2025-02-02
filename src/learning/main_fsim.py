@@ -23,7 +23,8 @@ CONFIG_DIR = ROOT / 'config' / 'models_config'
 RUN_DIR = ROOT / 'runs' / 'facetid_models'
 
 def get_run_path(cl_args):
-    run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%Y-%m-%d_%H")}"
+    # run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%Y-%m-%d_%H")}"
+    run_path = RUN_DIR / f"{cl_args.model_name}_{cl_args.dataset}_{datetime.now().strftime("%H_%d_%m_%y")}"
     run_path.mkdir(parents=True, exist_ok=True)
     return run_path
 
@@ -77,8 +78,25 @@ def setup_logging(log_fname: str = None):
     logging.info(' '.join(sys.argv))
 
 def get_model(model_name, all_hparams):
-    if model_name in {'gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
+    if model_name in {'gte-qwen2-1.5b-instruct-ts-aspire'}:
         return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
+    elif model_name in {"gte-qwen2-1.5b-instruct-co-cite"}:
+        return disent_models.CoQwen2(model_hparams=all_hparams) # TODO Change
+    else:
+        logging.error(f'Unknown model: {model_name}')
+        sys.exit(1)
+
+def get_batcher(model_name, all_hparams):
+    # Select appropriate batcher class.
+    if model_name in {'gte-qwen2-1.5b-instruct-ts-aspire'}:
+        batcher_cls = batchers.AbsSentTokBatcherPreAlign
+        batcher_cls.align_type = all_hparams.get('align_type', 'cc_align')
+        batcher_cls.bert_config_str = all_hparams['base-pt-layer']
+        return batcher_cls
+    elif model_name in {"gte-qwen2-1.5b-instruct-co-cite"}:
+        batcher_cls = batchers.AbsTripleBatcher
+        batcher_cls.bert_config_str = all_hparams['base-pt-layer']
+        return batcher_cls
     else:
         logging.error(f'Unknown model: {model_name}')
         sys.exit(1)
@@ -97,17 +115,6 @@ def save_config(all_hparams, run_path):
     run_info = {'all_hparams': all_hparams}
     with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
         json.dump(run_info, fp)
-
-def get_batcher(model_name, all_hparams):
-    # Select appropriate batcher class.
-    if model_name in {'gte-Qwen2-1.5B-instruct-ts-aspire','gte-Qwen2-1.5B-instruct-tsot-aspire',"gte-Qwen2-7B-instruct-ts-aspire"}:
-        batcher = batchers.AbsSentTokBatcherPreAlign
-        batcher.align_type = all_hparams.get('align_type', 'cc_align')
-        batcher.config_str = all_hparams['base-pt-layer']
-        return batcher
-    else:
-        logging.error(f'Unknown model: {model_name}')
-        sys.exit(1)
 
 
 def setup_ddp(rank, world_size):
@@ -260,11 +267,21 @@ def main():
 
     train_args = subparsers.add_parser('train_model')
     train_args.add_argument('--model_name', required=True,
-                            choices=['cospecter', 'miswordbienc',
-                                     'miswordpolyenc', 'sbalisentbienc', 'mistral_ts_aspire','gte-Qwen2-1.5B-instruct-ts-aspire',"gte-Qwen2-7B-instruct-ts-aspire"],
+                            choices=[
+                                     'cospecter',
+                                     'miswordbienc',
+                                     'miswordpolyenc',
+                                     'sbalisentbienc',
+                                     'gte-qwen2-1.5b-instruct-ts-aspire',
+                                     "gte-qwen2-1.5b-instruct-ts-aspire-co-cite"
+                                     ],
                             help='The name of the model to train.')
     train_args.add_argument('--dataset', required=True,
-                            choices=['s2orcscidocs', 's2orccompsci', 's2orcbiomed', 'relish', 'treccovid'],
+                            choices=['s2orcscidocs',
+                                     's2orccompsci',
+                                     's2orcbiomed',
+                                     'relish',
+                                     'treccovid'],
                             help='The dataset to train and predict on.')
     train_args.add_argument('--num_gpus', required=True, type=int,
                             help='Number of GPUs to train on/number of processes running parallel training.')

@@ -1,0 +1,19 @@
+{
+    "model_name": "gte-qwen2-1.5b-instruct-co-cite",
+    "base-pt-layer":  "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
+    "embedding_dim": 1536,
+    "train_suffix": "cocitabs",
+    "train_size": 300,
+    "dev_size": 100,
+    "num_epochs": 1,
+    "batch_size": 3,
+    "accumulated_batch_size": 30,
+    "update_rule": "adam",
+    "learning_rate": 2e-5,
+    "num_warmup_steps": 10,
+    "decay_lr_every": 1,
+    "lr_decay_method": "warmuplin",
+    "decay_lr_by": 0.95,
+    "es_check_every": 50,
+    "fine_tune": true
+}

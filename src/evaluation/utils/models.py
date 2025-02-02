@@ -925,59 +925,59 @@ class AspireContextNER(SimilarityModel):
         else:
             raise NotImplementedError(f"Unknown model type: {self.model_type}; should be 'ot' or 'ts'")
 
-# class QwenAspireCoCite(SimilarityModel):
-#     """
-#     Class for our trained models which provide abstracts embeddings
-#     """
-#
-#     # model names mapped to their model class
-#     MODEL_CLASSES = {
-#         # 'gte-qwen2-1.5B-instruct-biomed-co-cite': disent_models.Qwen2InstructCoCite,
-#     }
-#     MODEL_BATCHERS = {
-#         'gte-qwen2-1.5B-instruct-biomed-co-cite': batchers.AbsTripleBatcher
-#     }
-#
-#     def __init__(self, trained_model_path, model_version='cur_best', **kwargs):
-#         super(TrainedInstructAbstractModel, self).__init__(encoding_type='abstract', **kwargs)
-#
-#         run_info_filename = os.path.join(trained_model_path, 'run_info.json')
-#         weights_filename = os.path.join(trained_model_path, f'model_{model_version}.pt')
-#         assert os.path.exists(run_info_filename)
-#         assert os.path.exists(weights_filename)
-#
-#         # load hyper-params file
-#         with codecs.open(run_info_filename, 'r', 'utf-8') as fp:
-#             run_info = json.load(fp)
-#             hyper_params = run_info['all_hparams']
-#
-#         # get model class and batcher
-#         ModelClass = TrainedInstructAbstractModel.MODEL_CLASSES.get(self.name, None)
-#         batcher = TrainedInstructAbstractModel.MODEL_BATCHERS.get(self.name, None)
-#         if ModelClass is None or batcher is None:
-#             raise NotImplementedError(f"Unknown model {self.name}")
-#         self.tokenizer = AutoTokenizer.from_pretrained(hyper_params['base-pt-layer'])
-#         self.batcher = batcher
-#         # init trained model
-#         self.model = ModelClass(hyper_params)
-#         # load weights
-#         self.model.load_state_dict(torch.load(weights_filename))
-#         # Move model to GPU
-#         if torch.cuda.is_available():
-#             self.model.cuda()
-#         self.model.eval()
-#
-#
-#     def encode(self, batch_papers: List[Dict], task_description: str=None):
-#         # pre-process input
-#         batch = [paper['TITLE'] + '\n' + ' '.join(paper['ABSTRACT']) for paper in batch_papers]
-#         # pass through model
-#         batch, _, _ = self.batcher.prepare_bert_sentences(sents=batch, tokenizer=self.tokenizer, query_instruct=False, bert_like=False)
-#         ret_dict = self.model.encode(batch_dict={'bert_batch': batch})
-#         return ret_dict['doc_cls_reps']
-#
-#     def get_similarity(self, x, y):
-#         return -euclidean(x, y)
+class QwenAspireCoCite(SimilarityModel):
+    """
+    Class for our trained models which provide abstracts embeddings
+    """
+
+    # model names mapped to their model class
+    MODEL_CLASSES = {
+        # 'gte-qwen2-1.5B-instruct-biomed-co-cite': disent_models.Qwen2InstructCoCite,
+    }
+    MODEL_BATCHERS = {
+        'gte-qwen2-1.5B-instruct-biomed-co-cite': batchers.AbsTripleBatcher
+    }
+
+    # def __init__(self, trained_model_path, model_version='cur_best', **kwargs):
+    #     super(TrainedInstructAbstractModel, self).__init__(encoding_type='abstract', **kwargs)
+    #
+    #     run_info_filename = os.path.join(trained_model_path, 'run_info.json')
+    #     weights_filename = os.path.join(trained_model_path, f'model_{model_version}.pt')
+    #     assert os.path.exists(run_info_filename)
+    #     assert os.path.exists(weights_filename)
+    #
+    #     # load hyper-params file
+    #     with codecs.open(run_info_filename, 'r', 'utf-8') as fp:
+    #         run_info = json.load(fp)
+    #         hyper_params = run_info['all_hparams']
+    #
+    #     # get model class and batcher
+    #     ModelClass = TrainedInstructAbstractModel.MODEL_CLASSES.get(self.name, None)
+    #     batcher = TrainedInstructAbstractModel.MODEL_BATCHERS.get(self.name, None)
+    #     if ModelClass is None or batcher is None:
+    #         raise NotImplementedError(f"Unknown model {self.name}")
+    #     self.tokenizer = AutoTokenizer.from_pretrained(hyper_params['base-pt-layer'])
+    #     self.batcher = batcher
+    #     # init trained model
+    #     self.model = ModelClass(hyper_params)
+    #     # load weights
+    #     self.model.load_state_dict(torch.load(weights_filename))
+    #     # Move model to GPU
+    #     if torch.cuda.is_available():
+    #         self.model.cuda()
+    #     self.model.eval()
+    #
+    #
+    # def encode(self, batch_papers: List[Dict], task_description: str=None):
+    #     # pre-process input
+    #     batch = [paper['TITLE'] + '\n' + ' '.join(paper['ABSTRACT']) for paper in batch_papers]
+    #     # pass through model
+    #     batch, _, _ = self.batcher.prepare_bert_sentences(sents=batch, tokenizer=self.tokenizer, query_instruct=False, bert_like=False)
+    #     ret_dict = self.model.encode(batch_dict={'bert_batch': batch})
+    #     return ret_dict['doc_cls_reps']
+    #
+    # def get_similarity(self, x, y):
+    #     return -euclidean(x, y)
 
 class TrainedTSAspireModel(SimilarityModel):
     """
