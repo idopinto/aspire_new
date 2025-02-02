@@ -1,5 +1,5 @@
 {
-  "model_name": "gte-Qwen2-1.5B-instruct-ts-aspire",
+  "model_name": "gte-qwen2-1.5b-instruct-ts-aspire",
   "base-pt-layer": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
   "embedding_dim": 1536,
   "score_aggregation": "l2max",
@@ -20,6 +20,8 @@
   "decay_lr_by": 0.95,
   "es_check_every": 10000,
   "fine_tune": true,
+  "query_instruct":true,
+  "bert_like": false,
   "lora": true,
   "lora_config": {
     "r": 16,

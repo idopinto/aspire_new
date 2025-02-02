@@ -13,7 +13,7 @@ import torch.distributed as dist
 
 from pathlib import Path
 from src.learning import trainer, facetid_models, batchers
-from src.learning.facetid_models import disent_models
+from src.learning.facetid_models import disent_models, decoder_only_models
 import wandb
 
 PROJECT_NAME = 'aspire'
@@ -77,31 +77,33 @@ def setup_logging(log_fname: str = None):
     # Log the full command-line call for reference
     logging.info(' '.join(sys.argv))
 
-def get_model(model_name, all_hparams):
-    if model_name in {'gte-qwen2-1.5b-instruct-ts-aspire'}:
-        return disent_models.DecoderOnlyAspire(model_hparams=all_hparams)
-    elif model_name in {"gte-qwen2-1.5b-instruct-co-cite"}:
-        return disent_models.CoQwen2(model_hparams=all_hparams) # TODO Change
-    else:
-        logging.error(f'Unknown model: {model_name}')
-        sys.exit(1)
 
-def get_batcher(model_name, all_hparams):
-    # Select appropriate batcher class.
-    if model_name in {'gte-qwen2-1.5b-instruct-ts-aspire'}:
-        batcher_cls = batchers.AbsSentTokBatcherPreAlign
-        batcher_cls.align_type = all_hparams.get('align_type', 'cc_align')
-        batcher_cls.bert_config_str = all_hparams['base-pt-layer']
-        return batcher_cls
-    elif model_name in {"gte-qwen2-1.5b-instruct-co-cite"}:
-        batcher_cls = batchers.AbsTripleBatcher
-        batcher_cls.bert_config_str = all_hparams['base-pt-layer']
-        return batcher_cls
-    else:
-        logging.error(f'Unknown model: {model_name}')
-        sys.exit(1)
+class ModelFactory:
+    @staticmethod
+    def create(model_name: str, hparams: dict):
+        model_map = {
+            'cospecter': (disent_models.MySPECTER, batchers.AbsTripleBatcher),
+            'miswordbienc': (disent_models.WordSentAlignBiEnc, batchers.AbsSentTokBatcher),
+            'sbalisentbienc': (disent_models.WordSentAbsSupAlignBiEnc, batchers.AbsSentTokBatcherPreAlign),
+            'gte-qwen2-1.5b-instruct-co-cite': (decoder_only_models.CoQwen, batchers.AbsTripleBatcher),
+            'gte-qwen2-1.5b-instruct-ts-aspire': (decoder_only_models.TSQwen, batchers.AbsSentTokBatcherPreAlign),
+            'gte-qwen2-1.5b-instruct-ot-aspire':(decoder_only_models.OTQwen, batchers.AbsSentTokBatcher)
+        }
 
-def get_config(config_path, run_path):
+        if model_name not in model_map:
+            raise ValueError(f'Unknown model: {model_name}')
+
+        model_cls, batcher_cls = model_map[model_name]
+        model = model_cls(model_hparams=hparams)
+        model.model_name = model_name # for backward compatibility
+        batcher_cls.bert_config_str = hparams['base-pt-layer']
+
+        if model_name in {'sbalisentbienc', 'gte-qwen2-1.5b-instruct-ts-aspire'}:
+            batcher_cls.align_type = hparams.get('align_type', 'cc_align')
+
+        return model, batcher_cls
+
+def get_config(config_path):
     # Load hyperparameters.
     with codecs.open(config_path, 'r', 'utf-8') as fp:
         all_hparams = json.load(fp)
@@ -146,7 +148,7 @@ def ddp_train_model(process_rank, cl_args):
     run_path = get_run_path(cl_args)
     run_name = run_path.name
     config_path = CONFIG_DIR / str(cl_args.config_path)
-    all_hparams = get_config(config_path, run_path) # Load hyperparameters and configs
+    all_hparams = get_config(config_path) # Load hyperparameters and configs
     model_name = all_hparams['model_name']
     # print(f"Process rank {process_rank},pid={os.getpid()}, checkpoint: setup_ddp")
     setup_ddp(rank=process_rank, world_size=cl_args.num_gpus)
@@ -159,12 +161,9 @@ def ddp_train_model(process_rank, cl_args):
             init_wandb(all_hparams, run_name)
             logger = get_logger()
             # Save hyperparams to disk from a single process.
-            run_info = {'all_hparams': all_hparams}
-            with codecs.open(os.path.join(run_path, 'run_info.json'), 'w', 'utf-8') as fp:
-                json.dump(run_info, fp)
+            save_config(all_hparams, run_path)
 
-        model = get_model(model_name, all_hparams)
-        model.model_name = model_name # for backward compatiblity
+        model, batcher_cls = ModelFactory.create(model_name, all_hparams)
         model = model.to(process_rank)
 
         # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: model initialized")
@@ -182,14 +181,14 @@ def ddp_train_model(process_rank, cl_args):
             # if process_rank == 0: logger.info('Running on GPU.')
 
         # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: ddp model initialized")
-        batcher = get_batcher(model_name, all_hparams)
+        # batcher = get_batcher(model_name, all_hparams)
         # print(f"Process rank {process_rank},pid={os.getpid()},checkpoint: batcher initialized.")
 
         model_trainer = trainer.BasicRankingTrainerDDP(logger=logger,
                                                        process_rank=process_rank,
                                                        num_gpus=cl_args.num_gpus,
                                                        model=model,
-                                                       batcher=batcher,
+                                                       batcher=batcher_cls,
                                                        data_path=TRAIN_DATA_DIR,
                                                        model_path=run_path,
                                                        early_stop=True,
@@ -211,11 +210,6 @@ def ddp_train_model(process_rank, cl_args):
             wandb.finish()
 
 
-
-
-
-
-
 def train_model(cl_args):
     """
     Read training and dev data, initialize and train the model.
@@ -224,12 +218,11 @@ def train_model(cl_args):
     run_path = get_run_path(cl_args)
     run_name = run_path.name
     config_path = CONFIG_DIR / str(cl_args.config_path)
-    all_hparams = get_config(config_path, run_path)
+    all_hparams = get_config(config_path)
     save_config(all_hparams, run_path)
     model_name = all_hparams['model_name']
     init_wandb(all_hparams, run_name)
-    model = get_model(model_name, all_hparams)
-    model.model_name = model_name # Set model name attribute for backward compatibility.
+    model, batcher_cls = ModelFactory.create(model_name, all_hparams)
     # Move model to GPU if available.
     if torch.cuda.is_available():
         model.cuda()
@@ -237,12 +230,11 @@ def train_model(cl_args):
     logging.info(model)
 
     # Save initial (untrained) model.
-    # trainer.generic_save_function(model=model, save_path=run_path, model_suffix='init')
-    batcher = get_batcher(model_name, all_hparams)
+    trainer.generic_save_function(model=model, save_path=run_path, model_suffix='init')
     # Initialize the trainer.
     model_trainer = trainer.BasicRankingTrainer(
         model=model,
-        batcher=batcher,
+        batcher=batcher_cls,
         data_path=TRAIN_DATA_DIR,
         model_path=run_path,
         early_stop=True,
@@ -268,12 +260,13 @@ def main():
     train_args = subparsers.add_parser('train_model')
     train_args.add_argument('--model_name', required=True,
                             choices=[
-                                     'cospecter',
-                                     'miswordbienc',
-                                     'miswordpolyenc',
-                                     'sbalisentbienc',
+                                     'cospecter', # SpecterCoCite
+                                     'miswordbienc', # OTAspire
+                                     'miswordpolyenc', # PolyEncoder - not in the paper.
+                                     'sbalisentbienc', # TSAspire
                                      'gte-qwen2-1.5b-instruct-ts-aspire',
-                                     "gte-qwen2-1.5b-instruct-ts-aspire-co-cite"
+                                     "gte-qwen2-1.5b-instruct-ts-aspire-co-cite",
+                                     'gte-qwen2-1.5b-instruct-ot-aspire'
                                      ],
                             help='The name of the model to train.')
     train_args.add_argument('--dataset', required=True,
@@ -289,6 +282,8 @@ def main():
                             help='Path to directory json config file for model.')
     train_args.add_argument('--log_fname',
                             help='Path to directory to save log files.')
+    parser.add_argument('--query_instruct', action='store_true', help='Use to wrap query with instruction')
+
     cl_args = parser.parse_args()
 
     print(f"PyTorch version: {torch.__version__}")

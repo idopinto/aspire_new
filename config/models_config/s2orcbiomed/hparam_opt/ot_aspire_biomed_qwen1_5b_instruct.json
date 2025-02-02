@@ -1,5 +1,5 @@
 {
-    "model_name": "gte-Qwen2-1.5B-instruct-ot-aspire",
+    "model_name": "gte-qwen2-1.5b-instruct-ot-aspire",
     "base-pt-layer": "Alibaba-NLP/gte-Qwen2-1.5B-instruct",
     "score_aggregation": "l2wasserstein",
     "geoml_blur": 0.05,

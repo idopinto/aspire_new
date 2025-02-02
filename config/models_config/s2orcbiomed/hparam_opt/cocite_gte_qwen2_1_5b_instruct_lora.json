@@ -14,5 +14,12 @@
     "lr_decay_method": "warmuplin",
     "decay_lr_by": 0.95,
     "es_check_every": 10000,
-    "fine_tune": true
+    "fine_tune": true,
+    "query_instruct":true,
+    "bert_like": false,
+    "lora": true,
+    "lora_config": {
+        "r": 16,
+        "lora_alpha": 32
+  }
 }
